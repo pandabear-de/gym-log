@@ -75,7 +75,7 @@ a { color: var(--accent); }
 .card.warn { background: var(--accent-soft); border-color: transparent; display: flex; gap: 12px; align-items: center; justify-content: space-between; }
 
 /* Buttons */
-button { font: inherit; color: inherit; }
+button { font: inherit; color: inherit; touch-action: manipulation; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   min-height: 46px; padding: 0 18px;
@@ -270,3 +270,17 @@ table.sets-table { width: 100%; border-collapse: collapse; margin-top: 10px; fon
 }
 .empty { text-align: center; padding: 28px 12px; color: var(--muted); }
 .file-btn { cursor: pointer; }
+
+/* −/+ stepper under the active set */
+.set-row.active .set-no { color: var(--accent); }
+.set-row.active:not(.done) .field input { border-color: var(--accent); }
+.stepper-bar { display: grid; grid-template-columns: 26px 1fr 1fr 50px 30px; gap: 8px; margin-top: -2px; }
+.step-group { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.step {
+  min-height: 40px; border-radius: 10px; border: none; cursor: pointer;
+  background: var(--accent-soft); color: var(--accent);
+  font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums;
+}
+.step:active { transform: scale(.94); }
+@keyframes bump { 40% { transform: scale(1.06); } }
+.field input.bump { animation: bump .25s ease-out; }

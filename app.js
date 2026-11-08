@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.1.0';
+  const APP_VERSION = '1.2.0';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -42,6 +42,7 @@
         sound: true,
         loudInSilent: false,
         keepAwake: true,
+        weightStep: 5,
         watchShortcut: false,
         shortcutName: 'Gym Pause',
         lastExport: null,
@@ -317,14 +318,15 @@
   function exerciseCard(ex) {
     const last = lastPerformance(ex.machineId);
     const allDone = ex.sets.length && ex.sets.every((s) => s.done);
+    const activeId = activeSetId(ex);
     const rows = ex.sets.map((s, i) => `
-      <div class="set-row ${s.done ? 'done' : ''}" data-set="${s.id}">
+      <div class="set-row ${s.done ? 'done' : ''} ${s.id === activeId ? 'active' : ''}" data-set="${s.id}">
         <span class="set-no">${i + 1}</span>
         <label class="field"><input type="text" inputmode="decimal" enterkeyhint="next" data-field="weight" value="${fmtNum(s.weight)}" placeholder="–" aria-label="Gewicht Satz ${i + 1}"><span>kg</span></label>
         <label class="field"><input type="text" inputmode="numeric" enterkeyhint="done" data-field="reps" value="${s.reps ?? ''}" placeholder="–" aria-label="Wiederholungen Satz ${i + 1}"><span>Wdh.</span></label>
         <button class="check" data-action="toggle-set" aria-pressed="${s.done}" aria-label="Satz ${i + 1} erledigt">✓</button>
         <button class="icon-btn" data-action="delete-set" aria-label="Satz ${i + 1} löschen">×</button>
-      </div>`).join('');
+      </div>${s.id === activeId ? stepperBar(s.id) : ''}`).join('');
     return `
       <section class="card exercise ${allDone ? 'all-done' : ''}" id="ex-${ex.id}" data-ex="${ex.id}">
         <div class="ex-head">
@@ -347,6 +349,42 @@
           </div>
         </div>
       </section>`;
+  }
+
+  // Set with the −/+ bar: the one the user picked, else the first set not yet done
+  const selectedByEx = {};
+  function activeSetId(ex) {
+    const sel = selectedByEx[ex.id];
+    if (sel && ex.sets.some((s) => s.id === sel)) return sel;
+    return ex.sets.find((s) => !s.done)?.id || null;
+  }
+  function stepperBar(setId) {
+    const step = fmtNum(state.settings.weightStep || 5);
+    return `
+      <div class="stepper-bar" data-set="${setId}">
+        <span></span>
+        <div class="step-group">
+          <button class="step" data-action="step" data-field="weight" data-delta="-1" aria-label="${step} kg weniger">−${step}</button>
+          <button class="step" data-action="step" data-field="weight" data-delta="1" aria-label="${step} kg mehr">+${step}</button>
+        </div>
+        <div class="step-group">
+          <button class="step" data-action="step" data-field="reps" data-delta="-1" aria-label="Eine Wiederholung weniger">−1</button>
+          <button class="step" data-action="step" data-field="reps" data-delta="1" aria-label="Eine Wiederholung mehr">+1</button>
+        </div>
+      </div>`;
+  }
+  function selectSet(card, row) {
+    const exId = card.dataset.ex;
+    selectedByEx[exId] = row.dataset.set;
+    card.querySelectorAll('.set-row.active').forEach((r) => r.classList.remove('active'));
+    row.classList.add('active');
+    let bar = card.querySelector('.stepper-bar');
+    if (!bar) {
+      row.insertAdjacentHTML('afterend', stepperBar(row.dataset.set));
+      return;
+    }
+    bar.dataset.set = row.dataset.set;
+    row.after(bar);
   }
 
   function restOptions(selected) {
@@ -460,6 +498,8 @@
         <h2>Pause</h2>
         <div class="setting-row"><span>Standard-Pause für neue Geräte</span>
           <select data-setting="defaultRest" data-type="int">${restOptions(s.defaultRest)}</select></div>
+        <div class="setting-row"><span>Schrittweite der −/+ Tasten (Gewicht)</span>
+          <select data-setting="weightStep" data-type="float">${[1, 2.5, 5].map((v) => `<option value="${v}" ${v === s.weightStep ? 'selected' : ''}>${fmtNum(v)} kg</option>`).join('')}</select></div>
         ${toggle('sound', 'Ton am Ende der Pause', 'Piept 3-2-1 und am Ende – auch über Kopfhörer')}
         ${toggle('loudInSilent', 'Ton auch im Lautlos-Modus', 'Kann laufende Musik kurz unterbrechen')}
         ${toggle('keepAwake', 'Bildschirm im Training anlassen', 'Damit Timer und Ton zuverlässig laufen')}
@@ -702,7 +742,12 @@
   // ---------- events ----------
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action]');
-    if (!btn) return;
+    if (!btn) {
+      const r = e.target.closest('.set-row');
+      const c = r && r.closest('.exercise');
+      if (r && c) selectSet(c, r);
+      return;
+    }
     const action = btn.dataset.action;
     const card = btn.closest('.exercise');
     const ex = card ? findEx(card.dataset.ex) : null;
@@ -746,7 +791,9 @@
             if (next.reps == null) next.reps = set.reps;
           }
           startRest(ex, set);
+          if (selectedByEx[ex.id] === set.id) delete selectedByEx[ex.id];
         } else {
+          selectedByEx[ex.id] = set.id;
           set.done = false;
           set.doneAt = null;
           set.restTaken = null;
@@ -761,8 +808,31 @@
         if (!set) return;
         if (state.timer && state.timer.setId === set.id) state.timer = null;
         ex.sets.splice(ex.sets.indexOf(set), 1);
+        if (selectedByEx[ex.id] === set.id) delete selectedByEx[ex.id];
         save(); render();
         break;
+      case 'step': {
+        const bar = btn.closest('.stepper-bar');
+        const target = ex && bar ? ex.sets.find((x) => x.id === bar.dataset.set) : null;
+        if (!target) return;
+        const r = card.querySelector(`.set-row[data-set="${target.id}"]`);
+        if (r) syncRow(r, target);
+        const d = Number(btn.dataset.delta);
+        let input;
+        if (btn.dataset.field === 'weight') {
+          const step = state.settings.weightStep || 5;
+          target.weight = Math.max(0, Math.round(((target.weight ?? 0) + d * step) * 100) / 100);
+          input = r?.querySelector('[data-field=weight]');
+          if (input) input.value = fmtNum(target.weight);
+        } else {
+          target.reps = Math.max(0, (target.reps ?? 0) + d);
+          input = r?.querySelector('[data-field=reps]');
+          if (input) input.value = target.reps;
+        }
+        if (input) { input.classList.remove('bump'); void input.offsetWidth; input.classList.add('bump'); }
+        save();
+        break;
+      }
       case 'add-set': {
         const lastSet = ex.sets[ex.sets.length - 1];
         ex.sets.push(newSet(lastSet?.weight ?? null, lastSet?.reps ?? null));
@@ -857,6 +927,7 @@
       const k = el.dataset.setting;
       if (el.type === 'checkbox') state.settings[k] = el.checked;
       else if (el.dataset.type === 'int') state.settings[k] = parseInt(el.value, 10);
+      else if (el.dataset.type === 'float') state.settings[k] = parseFloat(el.value);
       else state.settings[k] = el.value.trim();
       save();
       if (k === 'keepAwake') updateWakeLock();
@@ -868,6 +939,13 @@
       importFile(el.files[0]);
       el.value = '';
     }
+  });
+
+  document.addEventListener('focusin', (e) => {
+    if (!e.target.dataset?.field) return;
+    const r = e.target.closest('.set-row');
+    const c = r && r.closest('.exercise');
+    if (r && c && !r.classList.contains('active')) selectSet(c, r);
   });
 
   document.addEventListener('input', (e) => {
