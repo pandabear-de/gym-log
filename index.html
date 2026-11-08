@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Gym Log">
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0e12" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+<title>Gym Log</title>
+</head>
+<body>
+<main id="app"></main>
+
+<div id="timer" class="timer" hidden>
+  <div class="ring-wrap">
+    <svg viewBox="0 0 100 100" class="ring" aria-hidden="true">
+      <circle cx="50" cy="50" r="44" class="ring-bg"/>
+      <circle cx="50" cy="50" r="44" class="ring-fg" id="ring-fg"/>
+    </svg>
+    <div class="timer-time" id="timer-time" aria-live="polite">0:00</div>
+  </div>
+  <div class="timer-side">
+    <div class="timer-label" id="timer-label">Pause</div>
+    <div class="timer-next" id="timer-next"></div>
+    <div class="timer-actions">
+      <button class="pill" data-action="timer-minus" aria-label="15 Sekunden weniger">−15 s</button>
+      <button class="pill" data-action="timer-plus" aria-label="15 Sekunden mehr">+15 s</button>
+      <button class="pill primary" data-action="timer-skip" id="timer-skip">Weiter ›</button>
+    </div>
+  </div>
+</div>
+
+<nav class="tabbar" aria-label="Navigation">
+  <a href="#/training" data-tab="training">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6.5 6.5v11M17.5 6.5v11M3 9.5v5M21 9.5v5M6.5 12h11"/></svg>
+    Training</a>
+  <a href="#/geraete" data-tab="geraete">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+    Geräte</a>
+  <a href="#/verlauf" data-tab="verlauf">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    Verlauf</a>
+  <a href="#/mehr" data-tab="mehr">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 20h14"/></svg>
+    Export</a>
+</nav>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-backdrop" data-action="close-sheet"></div>
+  <div class="sheet-panel" role="dialog" aria-modal="true">
+    <button class="icon-btn sheet-close" data-action="close-sheet" aria-label="Schließen">×</button>
+    <div id="sheet-body"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden role="status"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
