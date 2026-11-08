@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.4.0';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -111,16 +111,33 @@
 
   const CARDIO_TYPES = {
     laufband: { label: 'Laufband', fields: ['minutes', 'speed', 'incline'] },
-    rad: { label: 'Rad / Ergometer', fields: ['minutes', 'level', 'watts'] },
+    rad: { label: 'Rad / Ergometer', fields: ['minutes', 'level'] },
     stepper: { label: 'Stepper / Crosstrainer', fields: ['minutes', 'level'] },
   };
   const CARDIO_FIELDS = {
     minutes: { label: 'Dauer', unit: 'min', mode: 'decimal' },
-    speed: { label: 'Tempo', unit: 'km/h', mode: 'decimal' },
-    incline: { label: 'Steigung', unit: '%', mode: 'decimal' },
-    level: { label: 'Stufe', unit: '', mode: 'decimal' },
-    watts: { label: 'Leistung', unit: 'W', mode: 'numeric' },
+    speed: { label: 'Tempo', unit: 'km/h', mode: 'decimal', step: 0.5 },
+    incline: { label: 'Steigung', unit: '%', mode: 'decimal', step: 0.5 },
+    level: { label: 'Stufe', unit: '', mode: 'decimal', step: 1 },
+    watts: { label: 'Leistung', unit: 'W', mode: 'numeric', step: 10 },
   };
+  const LOG_FIELDS = ['speed', 'incline', 'level', 'watts'];
+  // While cardio runs, every settings change is kept with a timestamp (changes within 20 s are merged)
+  function logCardio(c, at = Date.now()) {
+    if (!c.startedAt || c.done) return;
+    const snap = { at };
+    for (const f of LOG_FIELDS) snap[f] = c[f] ?? null;
+    c.log = c.log || [];
+    const prev = c.log[c.log.length - 1];
+    if (prev && LOG_FIELDS.every((f) => prev[f] === snap[f])) return;
+    if (prev && at - prev.at < 20000) c.log[c.log.length - 1] = { ...snap, at: prev.at };
+    else c.log.push(snap);
+  }
+  function cardioSegments(c) {
+    if (!c || !c.log || c.log.length < 2 || !c.startedAt) return [];
+    const end = c.doneAt || Date.now();
+    return c.log.map((x, i) => ({ ...x, from: (x.at - c.startedAt) / 60000, to: ((c.log[i + 1]?.at ?? end) - c.startedAt) / 60000 }));
+  }
   const EFFORTS = { easy: 'leicht', ok: 'passend', hard: 'schwer' };
   const isCardio = (ex) => ex.kind === 'cardio';
   function cardioSummary(c) {
@@ -371,7 +388,8 @@
     const running = c.startedAt && !c.done;
     const fields = t.fields.map((f) => {
       const d = CARDIO_FIELDS[f];
-      return `<label class="cfield"><span>${d.label}</span><span class="field"><input type="text" inputmode="${d.mode}" data-cfield="${f}" value="${fmtNum(c[f])}" placeholder="–" aria-label="${d.label}"><span>${d.unit}</span></span></label>`;
+      const steps = d.step ? `<span class="cstep"><button class="step" data-action="cstep" data-f="${f}" data-delta="-1" aria-label="${d.label} weniger">−</button><button class="step" data-action="cstep" data-f="${f}" data-delta="1" aria-label="${d.label} mehr">+</button></span>` : '';
+      return `<div class="cfield"><label><span>${d.label}</span><span class="field"><input type="text" inputmode="${d.mode}" data-cfield="${f}" value="${fmtNum(c[f])}" placeholder="–" aria-label="${d.label}"><span>${d.unit}</span></span></label>${steps}</div>`;
     }).join('');
     const btn = c.done
       ? '<button class="btn block done-btn" data-action="cardio-toggle">✓ Erledigt</button>'
@@ -388,7 +406,7 @@
         ${last ? `<p class="last">Letztes Mal (${shortDate(last.date)}): ${esc(exSummary(last.ex))}</p>` : ''}
         ${progressHint(ex.machineId)}
         <div class="cfields">${fields}</div>
-        <p class="small muted">Wechselnde Werte? Den Wert eintragen, den du am längsten hattest. Dauer füllt sich bei „Fertig“ selbst aus.</p>
+        <p class="small muted">${running ? `Einstellung am Gerät geändert? Hier mitändern – die App merkt sich, ab wann welcher Wert galt.${c.log && c.log.length > 1 ? ` (${c.log.length - 1} Änderung${c.log.length > 2 ? 'en' : ''})` : ''}` : 'Startwerte eintragen und „Start“ tippen. Änderungen während des Trainings einfach mitändern. Die Dauer füllt sich bei „Fertig“ selbst aus.'}</p>
         ${btn}
         ${effortRow(ex)}
       </section>`;
@@ -551,6 +569,8 @@
           <h2>${esc(ex.name)}</h2>
           <p class="muted">Cardio · ${CARDIO_TYPES[ex.cardio?.type]?.label || ''}${ex.effort ? ' · ' + EFFORTS[ex.effort] : ''}</p>
           <p>${esc(cardioSummary(ex.cardio))}</p>
+          ${cardioSegments(ex.cardio).length ? `<h3>Verlauf der Einstellungen</h3>${cardioSegments(ex.cardio).map((g) =>
+            `<div class="hist-row"><span>${Math.round(g.from)}–${Math.round(g.to)} min</span><span>${esc(cardioSummary(g))}</span></div>`).join('')}` : ''}
         </section>` : `
         <section class="card">
           <h2>${esc(ex.name)}</h2>
@@ -676,7 +696,8 @@
       : [newSet(), newSet(), newSet()];
     const ex = { id: uid(), machineId: m.id, name: m.name, setup: m.setup || '', rest: m.rest || state.settings.defaultRest, note: '', effort: null, sets };
     if (m.kind === 'cardio') {
-      const lc = (last && last.ex.cardio) || {};
+      const lastC = (last && last.ex.cardio) || {};
+      const lc = lastC.log && lastC.log.length ? { ...lastC, ...lastC.log[0] } : lastC; // start values of last time
       ex.kind = 'cardio';
       ex.sets = [];
       ex.cardio = { type: m.cardioType || 'stepper', minutes: null, speed: lc.speed ?? null, incline: lc.incline ?? null,
@@ -741,6 +762,7 @@
         ...(isCardio(e) && e.cardio ? { cardio: {
           type: e.cardio.type, minutes: e.cardio.minutes, speedKmh: e.cardio.speed, inclinePct: e.cardio.incline,
           level: e.cardio.level, watts: e.cardio.watts, startedAt: toIso(e.cardio.startedAt), doneAt: toIso(e.cardio.doneAt), done: !!e.cardio.done,
+          log: (e.cardio.log || []).map((x) => ({ at: toIso(x.at), speedKmh: x.speed, inclinePct: x.incline, level: x.level, watts: x.watts })),
         } } : {}),
         sets: e.sets.map((x, i) => ({
           id: x.id,
@@ -775,6 +797,7 @@
           type: e.cardio.type || 'stepper', minutes: e.cardio.minutes ?? null, speed: e.cardio.speedKmh ?? e.cardio.speed ?? null,
           incline: e.cardio.inclinePct ?? e.cardio.incline ?? null, level: e.cardio.level ?? null, watts: e.cardio.watts ?? null,
           startedAt: toMs(e.cardio.startedAt), doneAt: toMs(e.cardio.doneAt), done: e.cardio.done ?? true,
+          log: (e.cardio.log || []).map((x) => ({ at: toMs(x.at), speed: x.speedKmh ?? x.speed ?? null, incline: x.inclinePct ?? x.incline ?? null, level: x.level ?? null, watts: x.watts ?? null })),
         } } : {}),
         sets: (e.sets || []).map((x) => ({
           id: x.id || uid(),
@@ -998,15 +1021,31 @@
       case 'cardio-start':
         if (!ex) return;
         if (state.timer) { if (!state.timer.finished) finalizeRest(state.timer, 'skipped'); state.timer = null; }
+        card.querySelectorAll('[data-cfield]').forEach((inp) => { ex.cardio[inp.dataset.cfield] = num(inp.value); });
         ex.cardio.startedAt = Date.now();
+        ex.cardio.log = [];
+        logCardio(ex.cardio, ex.cardio.startedAt);
         unlockAudio();
         save(); render();
         break;
+      case 'cstep': {
+        if (!ex || !ex.cardio) return;
+        const f = btn.dataset.f;
+        const d = CARDIO_FIELDS[f];
+        const c = ex.cardio;
+        c[f] = Math.max(0, Math.round(((c[f] ?? 0) + Number(btn.dataset.delta) * d.step) * 10) / 10);
+        const input = card.querySelector(`[data-cfield="${f}"]`);
+        if (input) { input.value = fmtNum(c[f]); input.classList.remove('bump'); void input.offsetWidth; input.classList.add('bump'); }
+        logCardio(c);
+        save();
+        break;
+      }
       case 'cardio-toggle': {
         if (!ex) return;
         const c = ex.cardio;
         card.querySelectorAll('[data-cfield]').forEach((inp) => { c[inp.dataset.cfield] = num(inp.value); });
         if (!c.done) {
+          logCardio(c);
           c.done = true;
           c.doneAt = Date.now();
           if (c.minutes == null && c.startedAt) c.minutes = Math.max(1, Math.round((c.doneAt - c.startedAt) / 60000));
@@ -1050,6 +1089,7 @@
       if (!ex || !ex.cardio) return;
       ex.cardio[el.dataset.cfield] = num(el.value);
       el.value = fmtNum(ex.cardio[el.dataset.cfield]);
+      if (el.dataset.cfield !== 'minutes') logCardio(ex.cardio);
       save();
       return;
     }

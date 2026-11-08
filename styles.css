@@ -300,3 +300,7 @@ table.sets-table { width: 100%; border-collapse: collapse; margin-top: 10px; fon
 .effort .pill.on { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 700; }
 .hint-line { font-size: 14px; margin: 6px 0 0; color: var(--accent); font-weight: 600; }
 .inline-form select { font-size: 17px; }
+.cfield label { display: block; }
+.cfield label > span:first-child { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+.cstep { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+.cstep .step { min-height: 38px; font-size: 20px; }
