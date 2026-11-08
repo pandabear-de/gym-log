@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.0.0';
+  const APP_VERSION = '1.1.0';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -454,7 +454,7 @@
         <button class="btn primary block" data-action="export">Exportieren (JSON)</button>
         <p class="small muted">Im Teilen-Menü „In Dateien sichern“ (iCloud Drive) oder AirDrop an den Mac wählen.</p>
         <label class="btn block file-btn">Backup importieren<input type="file" id="import-file" accept="application/json,.json" hidden></label>
-        <p class="small muted">Import ergänzt nur fehlende Trainings und Geräte, nichts wird überschrieben.</p>
+        <p class="small muted">Import ergänzt neue Trainings und Geräte. Trainings, die schon da sind, werden durch die Version aus der Datei ersetzt; deine Geräte-Einstellungen bleiben.</p>
       </section>
       <section class="card">
         <h2>Pause</h2>
@@ -583,6 +583,7 @@
   function serializeSession(s) {
     return {
       id: s.id,
+      ...(s.source ? { source: s.source } : {}),
       start: toIso(s.start),
       end: toIso(s.end),
       durationMin: s.end ? Math.round((s.end - s.start) / 60000) : null,
@@ -609,6 +610,7 @@
   function deserializeSession(s) {
     return {
       id: s.id || uid(),
+      ...(s.source ? { source: s.source } : {}),
       start: toMs(s.start),
       end: toMs(s.end),
       exercises: (s.exercises || []).map((e) => ({
@@ -674,18 +676,24 @@
     try {
       const data = JSON.parse(await file.text());
       if (!Array.isArray(data.sessions) || !Array.isArray(data.machines)) throw new Error('format');
-      let addM = 0, addS = 0;
+      let addM = 0, addS = 0, updS = 0;
       for (const m of data.machines) {
-        if (m && m.id && m.name && !machineById(m.id)) { state.machines.push(deserializeMachine(m)); addM++; }
+        if (!m || !m.id || !m.name) continue;
+        const have = machineById(m.id);
+        if (!have) { state.machines.push(deserializeMachine(m)); addM++; }
+        else if (!have.note && m.note) have.note = m.note;
       }
       for (const raw of data.sessions) {
         const s = deserializeSession(raw);
-        if (s.start && !state.sessions.some((x) => x.id === s.id)) { state.sessions.push(s); addS++; }
+        if (!s.start) continue;
+        const idx = state.sessions.findIndex((x) => x.id === s.id);
+        if (idx < 0) { state.sessions.push(s); addS++; }
+        else if (JSON.stringify(state.sessions[idx]) !== JSON.stringify(s)) { state.sessions[idx] = s; updS++; }
       }
       state.sessions.sort((a, b) => a.start - b.start);
       save();
       render();
-      toast(`Importiert: ${addS} Trainings, ${addM} Geräte`);
+      toast(`Import: ${addS} neue Trainings, ${updS} aktualisiert, ${addM} neue Geräte`);
     } catch (e) {
       toast('Import fehlgeschlagen – keine gültige Gym-Log-Datei');
     }
