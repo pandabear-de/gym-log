@@ -19,22 +19,26 @@ In der App unter Export → Apple Watch einschalten.
 Dateien ändern, in `sw.js` `CACHE` hochzählen (z. B. `gymlog-v2`), committen, pushen.
 Die App lädt die neue Version im Hintergrund; sie ist beim übernächsten Öffnen aktiv.
 
-## Exportformat (schemaVersion 1)
+## Exportformat (schemaVersion 1, ab App 1.3.0 erweitert)
 ```json
 {
   "app": "gym-log", "schemaVersion": 1, "exportedAt": "ISO-8601 UTC",
-  "machines": [{ "id", "name", "setup", "restSec", "note", "created" }],
+  "machines": [{ "id", "name", "kind": "strength|cardio", "cardioType": "laufband|rad|stepper",
+                 "setup", "restSec", "note", "created" }],
   "sessions": [{
-    "id", "start", "end", "durationMin",
+    "id", "source": "import (nur übernommene Altdaten)", "start", "end", "durationMin", "note",
     "exercises": [{
-      "machineId", "machine", "setup", "restPlannedSec", "note",
-      "sets": [{ "set", "weightKg", "reps", "done", "doneAt", "restPlannedSec", "restTakenSec" }]
+      "machineId", "machine", "kind", "setup", "restPlannedSec", "effort": "easy|ok|hard|null", "note",
+      "sets": [{ "set", "weightKg", "reps", "done", "doneAt", "restPlannedSec", "restTakenSec" }],
+      "cardio": { "type", "minutes", "speedKmh", "inclinePct", "level", "watts", "startedAt", "doneAt", "done" }
     }]
   }],
   "activeSession": null
 }
 ```
-`restTakenSec` = tatsächlich gelaufene Pause (bis Ablauf oder „Weiter“).
+- `restTakenSec` = tatsächlich gelaufene Pause (bis Ablauf oder „Weiter“).
+- `cardio` nur bei `kind: "cardio"`; `sets` ist dann leer. Werte = Hauptwert der Einheit.
+- `effort` = eigenes Empfinden pro Gerät (leicht / passend / schwer).
 
 ## Lokal testen
 ```

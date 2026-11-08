@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.2.0';
+  const APP_VERSION = '1.3.0';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -104,8 +104,42 @@
       sets++;
       volume += (x.weight || 0) * (x.reps || 0);
     }
-    return { sets, volume };
+    let cardioMin = 0;
+    for (const ex of s.exercises) if (isCardio(ex) && ex.cardio?.done) cardioMin += ex.cardio.minutes || 0;
+    return { sets, volume, cardioMin };
   }
+
+  const CARDIO_TYPES = {
+    laufband: { label: 'Laufband', fields: ['minutes', 'speed', 'incline'] },
+    rad: { label: 'Rad / Ergometer', fields: ['minutes', 'level', 'watts'] },
+    stepper: { label: 'Stepper / Crosstrainer', fields: ['minutes', 'level'] },
+  };
+  const CARDIO_FIELDS = {
+    minutes: { label: 'Dauer', unit: 'min', mode: 'decimal' },
+    speed: { label: 'Tempo', unit: 'km/h', mode: 'decimal' },
+    incline: { label: 'Steigung', unit: '%', mode: 'decimal' },
+    level: { label: 'Stufe', unit: '', mode: 'decimal' },
+    watts: { label: 'Leistung', unit: 'W', mode: 'numeric' },
+  };
+  const EFFORTS = { easy: 'leicht', ok: 'passend', hard: 'schwer' };
+  const isCardio = (ex) => ex.kind === 'cardio';
+  function cardioSummary(c) {
+    if (!c) return '–';
+    const parts = [];
+    if (c.minutes != null) parts.push(`${fmtNum(c.minutes)} min`);
+    if (c.speed != null) parts.push(`${fmtNum(c.speed)} km/h`);
+    if (c.incline != null) parts.push(`${fmtNum(c.incline)} %`);
+    if (c.level != null) parts.push(`Stufe ${fmtNum(c.level)}`);
+    if (c.watts != null) parts.push(`${fmtNum(c.watts)} W`);
+    return parts.join(' · ') || '–';
+  }
+  const exSummary = (ex) => (isCardio(ex) ? cardioSummary(ex.cardio) : setsSummary(ex.sets)) + (ex.effort ? ` (${EFFORTS[ex.effort]})` : '');
+  const exDone = (ex) => (isCardio(ex) ? !!ex.cardio?.done : ex.sets.some((s) => s.done));
+  const kindSelect = () => `
+    <select name="kind" aria-label="Art des Geräts">
+      <option value="kraft">Kraftgerät</option>
+      ${Object.entries(CARDIO_TYPES).map(([k, t]) => `<option value="${k}">Cardio: ${t.label}</option>`).join('')}
+    </select>`;
 
   // ---------- audio ----------
   let actx = null;
@@ -244,6 +278,7 @@
   function updateElapsed() {
     const el = $('#elapsed');
     if (el && state.active) el.textContent = fmtDur(Date.now() - state.active.start);
+    document.querySelectorAll('.cardio-elapsed').forEach((x) => { x.textContent = mmss((Date.now() - Number(x.dataset.start)) / 1000); });
   }
 
   // ---------- routing / rendering ----------
@@ -312,10 +347,55 @@
       </div>
       ${a.exercises.length ? a.exercises.map(exerciseCard).join('') : '<p class="empty">Noch kein Gerät. Füge das erste hinzu.</p>'}
       <button class="btn primary big" data-action="open-picker">+ Gerät hinzufügen</button>
+      <section class="card">
+        <label class="setup"><span>Notiz zum Training (optional)</span>
+          <textarea data-sessionfield="note" placeholder="z. B. müde, wenig geschlafen, Rücken zwickt">${esc(a.note || '')}</textarea></label>
+      </section>
       <button class="btn danger-text" data-action="discard-session">Training verwerfen</button>`;
   }
 
+  function effortRow(ex) {
+    return `<div class="effort"><span>Wie war's?</span>${Object.entries(EFFORTS).map(([k, l]) =>
+      `<button class="pill ${ex.effort === k ? 'on' : ''}" data-action="effort" data-v="${k}" aria-pressed="${ex.effort === k}">${l}</button>`).join('')}</div>`;
+  }
+  function progressHint(machineId) {
+    const h = machineHistory(machineId).slice(0, 2);
+    if (!h.length || h[0].ex.effort !== 'easy') return '';
+    const twice = h.length > 1 && h[1].ex.effort === 'easy';
+    return `<p class="hint-line">💡 ${twice ? '2× in Folge leicht' : 'Letztes Mal leicht'} – heute steigern?</p>`;
+  }
+  function cardioCard(ex) {
+    const c = ex.cardio;
+    const t = CARDIO_TYPES[c.type] || CARDIO_TYPES.stepper;
+    const last = lastPerformance(ex.machineId);
+    const running = c.startedAt && !c.done;
+    const fields = t.fields.map((f) => {
+      const d = CARDIO_FIELDS[f];
+      return `<label class="cfield"><span>${d.label}</span><span class="field"><input type="text" inputmode="${d.mode}" data-cfield="${f}" value="${fmtNum(c[f])}" placeholder="–" aria-label="${d.label}"><span>${d.unit}</span></span></label>`;
+    }).join('');
+    const btn = c.done
+      ? '<button class="btn block done-btn" data-action="cardio-toggle">✓ Erledigt</button>'
+      : running
+        ? `<button class="btn primary block" data-action="cardio-toggle">✓ Fertig · <span class="cardio-elapsed" data-start="${c.startedAt}">${mmss((Date.now() - c.startedAt) / 1000)}</span></button>`
+        : '<button class="btn primary block" data-action="cardio-start">▶ Start</button>';
+    return `
+      <section class="card exercise ${c.done ? 'all-done' : ''}" id="ex-${ex.id}" data-ex="${ex.id}">
+        <div class="ex-head">
+          <h2>${esc(ex.name)}</h2>
+          <button class="icon-btn" data-action="remove-exercise" aria-label="${esc(ex.name)} aus Training entfernen">⋯</button>
+        </div>
+        <p class="small muted">Cardio · ${t.label}${ex.setup ? ' · ' + esc(ex.setup) : ''}</p>
+        ${last ? `<p class="last">Letztes Mal (${shortDate(last.date)}): ${esc(exSummary(last.ex))}</p>` : ''}
+        ${progressHint(ex.machineId)}
+        <div class="cfields">${fields}</div>
+        <p class="small muted">Wechselnde Werte? Den Wert eintragen, den du am längsten hattest. Dauer füllt sich bei „Fertig“ selbst aus.</p>
+        ${btn}
+        ${effortRow(ex)}
+      </section>`;
+  }
+
   function exerciseCard(ex) {
+    if (isCardio(ex)) return cardioCard(ex);
     const last = lastPerformance(ex.machineId);
     const allDone = ex.sets.length && ex.sets.every((s) => s.done);
     const activeId = activeSetId(ex);
@@ -335,7 +415,8 @@
         </div>
         <label class="setup"><span>Einstellung</span>
           <input type="text" data-exfield="setup" value="${esc(ex.setup)}" placeholder="z. B. Sitz 4, Lehne 2" autocomplete="off"></label>
-        ${last ? `<p class="last">Letztes Mal (${shortDate(last.date)}): ${esc(setsSummary(last.ex.sets))}</p>` : ''}
+        ${last ? `<p class="last">Letztes Mal (${shortDate(last.date)}): ${esc(exSummary(last.ex))}</p>` : ''}
+        ${progressHint(ex.machineId)}
         <div class="sets">
           <div class="sets-head"><span></span><span>Gewicht</span><span>Wdh.</span><span>Fertig</span><span></span></div>
           ${rows}
@@ -348,6 +429,7 @@
             <button class="icon-btn" data-action="rest-plus" aria-label="Pause länger">+</button>
           </div>
         </div>
+        ${effortRow(ex)}
       </section>`;
   }
 
@@ -402,6 +484,7 @@
         <form class="inline-form" data-form="add-machine">
           <input type="text" name="name" placeholder="Neues Gerät, z. B. Beinpresse" required autocomplete="off">
           <input type="text" name="setup" placeholder="Einstellung (optional)" autocomplete="off">
+          ${kindSelect()}
           <button class="btn primary" type="submit">Gerät anlegen</button>
         </form>
       </section>
@@ -423,17 +506,19 @@
       <section class="card form" data-machine="${m.id}">
         <label>Name<input type="text" data-mfield="name" value="${esc(m.name)}" autocomplete="off"></label>
         <label>Einstellung<input type="text" data-mfield="setup" value="${esc(m.setup || '')}" placeholder="z. B. Sitz 4, Lehne 2" autocomplete="off"></label>
-        <label>Pause<select data-mfield="rest">${restOptions(m.rest || state.settings.defaultRest)}</select></label>
+        ${m.kind === 'cardio'
+          ? `<label>Art<select data-mfield="cardioType">${Object.entries(CARDIO_TYPES).map(([k, t]) => `<option value="${k}" ${k === m.cardioType ? 'selected' : ''}>${t.label}</option>`).join('')}</select></label>`
+          : `<label>Pause<select data-mfield="rest">${restOptions(m.rest || state.settings.defaultRest)}</select></label>`}
         <label>Notiz<textarea data-mfield="note" placeholder="z. B. Griffposition, Hinweise">${esc(m.note || '')}</textarea></label>
       </section>
       ${hist.length ? `
         <div class="stats">
           <div><b>${hist.length}</b><span>Trainings</span></div>
-          <div><b>${best != null ? fmtNum(best) + ' kg' : '–'}</b><span>Bestes Gewicht</span></div>
+          ${m.kind === 'cardio' ? '' : `<div><b>${best != null ? fmtNum(best) + ' kg' : '–'}</b><span>Bestes Gewicht</span></div>`}
           <div><b>${shortDate(hist[0].date)}</b><span>Zuletzt</span></div>
         </div>
         <section class="card"><h2>Verlauf</h2>
-          ${hist.slice(0, 20).map((h) => `<div class="hist-row"><span>${shortDate(h.date)}</span><span>${esc(setsSummary(h.ex.sets))}</span></div>`).join('')}
+          ${hist.slice(0, 20).map((h) => `<div class="hist-row"><span>${shortDate(h.date)}</span><span>${esc(exSummary(h.ex))}</span></div>`).join('')}
         </section>` : '<p class="empty">Noch nicht trainiert.</p>'}
       <button class="btn danger-text" data-action="delete-machine" data-id="${m.id}">Gerät löschen</button>`;
   }
@@ -459,10 +544,17 @@
         <div><b>${st.sets}</b><span>Sätze</span></div>
         <div><b>${fmtKg(st.volume)}</b><span>Volumen</span></div>
       </div>
-      ${s.exercises.map((ex) => `
+      ${st.cardioMin ? `<p class="muted">Cardio: ${fmtNum(st.cardioMin)} min</p>` : ''}
+      ${s.note ? `<section class="card"><h3 style="margin-top:0">Notiz</h3><p>${esc(s.note)}</p></section>` : ''}
+      ${s.exercises.map((ex) => isCardio(ex) ? `
         <section class="card">
           <h2>${esc(ex.name)}</h2>
-          ${ex.setup ? `<p class="muted">${esc(ex.setup)}</p>` : ''}
+          <p class="muted">Cardio · ${CARDIO_TYPES[ex.cardio?.type]?.label || ''}${ex.effort ? ' · ' + EFFORTS[ex.effort] : ''}</p>
+          <p>${esc(cardioSummary(ex.cardio))}</p>
+        </section>` : `
+        <section class="card">
+          <h2>${esc(ex.name)}</h2>
+          ${ex.setup || ex.effort ? `<p class="muted">${esc(ex.setup || '')}${ex.setup && ex.effort ? ' · ' : ''}${ex.effort ? EFFORTS[ex.effort] : ''}</p>` : ''}
           <table class="sets-table">
             <thead><tr><th>Satz</th><th>Gewicht</th><th>Wdh.</th><th>Pause</th></tr></thead>
             <tbody>${ex.sets.map((x, i) => `<tr><td>${i + 1}</td><td>${x.weight != null ? fmtNum(x.weight) + ' kg' : '–'}</td><td>${x.reps ?? '–'}</td><td>${x.restTaken != null ? mmss(x.restTaken) : '–'}</td></tr>`).join('')}</tbody>
@@ -557,20 +649,22 @@
       ${list.length > 6 ? '<input type="search" id="picker-search" placeholder="Suchen…" autocomplete="off">' : ''}
       ${list.length ? `<div class="list" id="picker-list">${list.map((m) => `
         <button class="list-item" data-action="pick-machine" data-id="${m.id}" data-name="${esc(m.name.toLowerCase())}">
-          <span><b>${esc(m.name)}</b><small>${esc(m.setup || '')}</small></span>${used.has(m.id) ? '<em>schon dabei</em>' : '<i>+</i>'}
+          <span><b>${esc(m.name)}</b><small>${m.kind === 'cardio' ? 'Cardio · ' + (CARDIO_TYPES[m.cardioType]?.label || '') + (m.setup ? ' · ' : '') : ''}${esc(m.setup || '')}</small></span>${used.has(m.id) ? '<em>schon dabei</em>' : '<i>+</i>'}
         </button>`).join('')}</div>` : ''}
       <h3>Neues Gerät</h3>
       <form class="inline-form" data-form="new-machine">
         <input type="text" name="name" placeholder="Name, z. B. Beinpresse" required autocomplete="off">
         <input type="text" name="setup" placeholder="Einstellung, z. B. Sitz 4, Lehne 2" autocomplete="off">
+        ${kindSelect()}
         <button class="btn primary" type="submit">Anlegen &amp; hinzufügen</button>
       </form>`);
   }
 
-  function createMachine(name, setup) {
+  function createMachine(name, setup, kind = 'kraft') {
     const existing = state.machines.find((m) => m.name.trim().toLowerCase() === name.toLowerCase());
     if (existing) return existing;
     const m = { id: uid(), name, setup, rest: state.settings.defaultRest, note: '', created: Date.now() };
+    if (CARDIO_TYPES[kind]) { m.kind = 'cardio'; m.cardioType = kind; }
     state.machines.push(m);
     return m;
   }
@@ -580,7 +674,14 @@
     const sets = last && last.ex.sets.length
       ? last.ex.sets.map((s) => newSet(s.weight, s.reps))
       : [newSet(), newSet(), newSet()];
-    const ex = { id: uid(), machineId: m.id, name: m.name, setup: m.setup || '', rest: m.rest || state.settings.defaultRest, note: '', sets };
+    const ex = { id: uid(), machineId: m.id, name: m.name, setup: m.setup || '', rest: m.rest || state.settings.defaultRest, note: '', effort: null, sets };
+    if (m.kind === 'cardio') {
+      const lc = (last && last.ex.cardio) || {};
+      ex.kind = 'cardio';
+      ex.sets = [];
+      ex.cardio = { type: m.cardioType || 'stepper', minutes: null, speed: lc.speed ?? null, incline: lc.incline ?? null,
+        level: lc.level ?? null, watts: lc.watts ?? null, startedAt: null, doneAt: null, done: false };
+    }
     state.active.exercises.push(ex);
     save();
     closeSheet();
@@ -597,7 +698,7 @@
 
   function finishSession() {
     const a = state.active;
-    const doneCount = a.exercises.reduce((n, e) => n + doneSets(e.sets).length, 0);
+    const doneCount = a.exercises.filter(exDone).length;
     if (!doneCount) {
       if (confirm('Noch kein Satz abgehakt. Training verwerfen?')) { state.active = null; state.timer = null; save(); render(); updateWakeLock(); }
       return;
@@ -607,8 +708,8 @@
     state.timer = null;
     a.end = Date.now();
     a.exercises = a.exercises
-      .map((e) => ({ ...e, sets: doneSets(e.sets) }))
-      .filter((e) => e.sets.length);
+      .map((e) => (isCardio(e) ? e : { ...e, sets: doneSets(e.sets) }))
+      .filter(exDone);
     state.sessions.push(a);
     state.sessions.sort((x, y) => x.start - y.start);
     state.active = null;
@@ -627,13 +728,20 @@
       start: toIso(s.start),
       end: toIso(s.end),
       durationMin: s.end ? Math.round((s.end - s.start) / 60000) : null,
+      note: s.note || '',
       exercises: s.exercises.map((e) => ({
         id: e.id,
         machineId: e.machineId,
         machine: e.name,
+        kind: e.kind || 'strength',
         setup: e.setup || '',
         restPlannedSec: e.rest,
+        effort: e.effort || null,
         note: e.note || '',
+        ...(isCardio(e) && e.cardio ? { cardio: {
+          type: e.cardio.type, minutes: e.cardio.minutes, speedKmh: e.cardio.speed, inclinePct: e.cardio.incline,
+          level: e.cardio.level, watts: e.cardio.watts, startedAt: toIso(e.cardio.startedAt), doneAt: toIso(e.cardio.doneAt), done: !!e.cardio.done,
+        } } : {}),
         sets: e.sets.map((x, i) => ({
           id: x.id,
           set: i + 1,
@@ -653,13 +761,21 @@
       ...(s.source ? { source: s.source } : {}),
       start: toMs(s.start),
       end: toMs(s.end),
+      note: s.note || '',
       exercises: (s.exercises || []).map((e) => ({
         id: e.id || uid(),
         machineId: e.machineId,
         name: e.machine ?? e.name ?? '?',
+        ...(e.kind === 'cardio' ? { kind: 'cardio' } : {}),
         setup: e.setup || '',
         rest: e.restPlannedSec ?? e.rest ?? state.settings.defaultRest,
+        effort: e.effort || null,
         note: e.note || '',
+        ...(e.kind === 'cardio' && e.cardio ? { cardio: {
+          type: e.cardio.type || 'stepper', minutes: e.cardio.minutes ?? null, speed: e.cardio.speedKmh ?? e.cardio.speed ?? null,
+          incline: e.cardio.inclinePct ?? e.cardio.incline ?? null, level: e.cardio.level ?? null, watts: e.cardio.watts ?? null,
+          startedAt: toMs(e.cardio.startedAt), doneAt: toMs(e.cardio.doneAt), done: e.cardio.done ?? true,
+        } } : {}),
         sets: (e.sets || []).map((x) => ({
           id: x.id || uid(),
           weight: x.weightKg ?? x.weight ?? null,
@@ -672,8 +788,10 @@
       })),
     };
   }
-  const serializeMachine = (m) => ({ id: m.id, name: m.name, setup: m.setup || '', restSec: m.rest, note: m.note || '', created: toIso(m.created) });
-  const deserializeMachine = (m) => ({ id: m.id, name: m.name, setup: m.setup || '', rest: m.restSec ?? m.rest ?? state.settings.defaultRest, note: m.note || '', created: toMs(m.created) });
+  const serializeMachine = (m) => ({ id: m.id, name: m.name, kind: m.kind || 'strength', ...(m.kind === 'cardio' ? { cardioType: m.cardioType } : {}),
+    setup: m.setup || '', restSec: m.rest, note: m.note || '', created: toIso(m.created) });
+  const deserializeMachine = (m) => ({ id: m.id, name: m.name, ...(m.kind === 'cardio' ? { kind: 'cardio', cardioType: m.cardioType || 'stepper' } : {}),
+    setup: m.setup || '', rest: m.restSec ?? m.rest ?? state.settings.defaultRest, note: m.note || '', created: toMs(m.created) });
 
   async function exportData() {
     const now = Date.now();
@@ -872,6 +990,33 @@
         save(); render();
         break;
       case 'export': exportData(); break;
+      case 'effort':
+        if (!ex) return;
+        ex.effort = ex.effort === btn.dataset.v ? null : btn.dataset.v;
+        save(); render();
+        break;
+      case 'cardio-start':
+        if (!ex) return;
+        if (state.timer) { if (!state.timer.finished) finalizeRest(state.timer, 'skipped'); state.timer = null; }
+        ex.cardio.startedAt = Date.now();
+        unlockAudio();
+        save(); render();
+        break;
+      case 'cardio-toggle': {
+        if (!ex) return;
+        const c = ex.cardio;
+        card.querySelectorAll('[data-cfield]').forEach((inp) => { c[inp.dataset.cfield] = num(inp.value); });
+        if (!c.done) {
+          c.done = true;
+          c.doneAt = Date.now();
+          if (c.minutes == null && c.startedAt) c.minutes = Math.max(1, Math.round((c.doneAt - c.startedAt) / 60000));
+        } else {
+          c.done = false;
+          c.doneAt = null;
+        }
+        save(); render();
+        break;
+      }
       case 'test-sound': unlockAudio(); setTimeout(beepDone, 120); break;
       case 'delete-session':
         if (confirm('Dieses Training endgültig löschen?')) {
@@ -900,6 +1045,19 @@
       save();
       return;
     }
+    if (el.dataset.cfield) {
+      const ex = findEx(el.closest('.exercise').dataset.ex);
+      if (!ex || !ex.cardio) return;
+      ex.cardio[el.dataset.cfield] = num(el.value);
+      el.value = fmtNum(ex.cardio[el.dataset.cfield]);
+      save();
+      return;
+    }
+    if (el.dataset.sessionfield && state.active) {
+      state.active[el.dataset.sessionfield] = el.value.trim();
+      save();
+      return;
+    }
     if (el.dataset.exfield) {
       const ex = findEx(el.closest('.exercise').dataset.ex);
       if (!ex) return;
@@ -916,6 +1074,7 @@
       if (!m) return;
       const f = el.dataset.mfield;
       if (f === 'rest') m.rest = parseInt(el.value, 10);
+      else if (f === 'cardioType') m.cardioType = el.value;
       else if (f === 'name') { if (el.value.trim()) m.name = el.value.trim(); }
       else m[f] = el.value.trim();
       save();
@@ -963,7 +1122,7 @@
     const name = String(fd.get('name') || '').trim();
     const setup = String(fd.get('setup') || '').trim();
     if (!name) return;
-    const m = createMachine(name, setup);
+    const m = createMachine(name, setup, String(fd.get('kind') || 'kraft'));
     if (setup && !m.setup) m.setup = setup;
     save();
     if (kind === 'new-machine' && state.active) addExercise(m);

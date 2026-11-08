@@ -284,3 +284,19 @@ table.sets-table { width: 100%; border-collapse: collapse; margin-top: 10px; fon
 .step:active { transform: scale(.94); }
 @keyframes bump { 40% { transform: scale(1.06); } }
 .field input.bump { animation: bump .25s ease-out; }
+
+/* Cardio */
+.cfields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.cfield { display: block; }
+.cfield > span:first-child { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+.done-btn { background: var(--done); color: #fff; border-color: transparent; }
+.exercise .btn.block { margin-top: 12px; min-height: 52px; font-size: 17px; }
+.cardio-elapsed { font-variant-numeric: tabular-nums; }
+
+/* Effort + hint */
+.effort { display: flex; align-items: center; gap: 6px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.effort span { color: var(--muted); font-size: 14px; margin-right: auto; white-space: nowrap; }
+.effort .pill { min-height: 36px; padding: 0 10px; font-weight: 500; }
+.effort .pill.on { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 700; }
+.hint-line { font-size: 14px; margin: 6px 0 0; color: var(--accent); font-weight: 600; }
+.inline-form select { font-size: 17px; }
