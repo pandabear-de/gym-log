@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.4.0';
+  const APP_VERSION = '1.5.0';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -55,11 +55,16 @@
       const raw = localStorage.getItem(STORE_KEY);
       if (!raw) return d;
       const s = JSON.parse(raw);
-      return { ...d, ...s, settings: { ...d.settings, ...(s.settings || {}) } };
+      return migrate({ ...d, ...s, settings: { ...d.settings, ...(s.settings || {}) } });
     } catch (e) {
       console.error(e);
       return d;
     }
+  }
+  // Machines whose note says "je Seite" are trained side by side (left/right alternating)
+  function migrate(st) {
+    for (const m of st.machines) if (m.sides === undefined && m.kind !== 'cardio' && /je Seite/i.test(m.note || '')) m.sides = true;
+    return st;
   }
   let state = load();
   function save() {
@@ -77,6 +82,10 @@
     const ex = findEx(exId);
     return { ex, set: ex ? ex.sets.find((s) => s.id === setId) || null : null };
   };
+  const SIDE_LABEL = { L: 'links', R: 'rechts' };
+  const sided = (ex) => !isCardio(ex) && (ex.sides ?? !!machineById(ex.machineId)?.sides);
+  const sideOf = (ex, i) => (sided(ex) ? (i % 2 ? 'R' : 'L') : null);
+  const localInput = (ms) => new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 16);
   const newSet = (weight = null, reps = null) => ({ id: uid(), weight, reps, done: false, doneAt: null, restPlanned: null, restTaken: null });
 
   function machineHistory(machineId) {
@@ -287,7 +296,7 @@
       $('#timer-label').textContent = t.finished ? 'Pause vorbei' : `Pause · ${ex.name}`;
       const next = ex.sets.slice(idx + 1).find((s) => !s.done);
       $('#timer-next').textContent = next
-        ? `Nächster: Satz ${ex.sets.indexOf(next) + 1}${next.weight != null ? ` · ${fmtNum(next.weight)} kg × ${next.reps ?? '–'}` : ''}`
+        ? `Nächster: Satz ${ex.sets.indexOf(next) + 1}${sideOf(ex, ex.sets.indexOf(next)) ? ' ' + SIDE_LABEL[sideOf(ex, ex.sets.indexOf(next))] : ''}${next.weight != null ? ` · ${fmtNum(next.weight)} kg × ${next.reps ?? '–'}` : ''}`
         : 'Nächstes Gerät';
     }
     $('#timer-skip').textContent = t.finished ? 'OK' : 'Weiter ›';
@@ -307,6 +316,7 @@
   let lastRouteKey = '';
   function render() {
     const r = route();
+    if (!(r.view === 'verlauf' && r.id === editId)) editId = null;
     let html;
     switch (r.view) {
       case 'geraete': html = r.id ? viewMachine(r.id) : viewMachines(); break;
@@ -324,11 +334,16 @@
     updateElapsed();
   }
 
-  function exportReminder() {
+  // Own trainings finished since the last export (imported ones already exist as a file)
+  function pendingBackup() {
     const last = state.settings.lastExport || 0;
-    const pending = state.sessions.filter((s) => s.end > last).length;
-    if (!pending || Date.now() - last < 14 * DAY) return '';
-    return `<section class="card warn"><span>${pending} ${pending === 1 ? 'Training' : 'Trainings'} noch nicht exportiert</span><button class="btn small" data-action="export">Export</button></section>`;
+    const list = state.sessions.filter((s) => s.source !== 'import' && s.end > last);
+    return { count: list.length, oldest: list.length ? list[0].end : null };
+  }
+  function exportReminder() {
+    const p = pendingBackup();
+    if (!p.count || (p.count < 3 && Date.now() - p.oldest < 7 * DAY)) return '';
+    return `<section class="card warn"><span><b>${p.count} ${p.count === 1 ? 'Training' : 'Trainings'} nicht gesichert</b><br><small>Die Daten liegen nur auf diesem iPhone.</small></span><button class="btn small" data-action="export">Sichern</button></section>`;
   }
 
   function viewStart() {
@@ -336,7 +351,10 @@
     return `
       <h1>Training</h1>
       ${exportReminder()}
-      <button class="btn primary big" data-action="start-session">Training starten</button>
+      ${last ? `
+        <button class="btn primary big" data-action="repeat-session" data-id="${last.id}">Wie letztes Mal starten</button>
+        <p class="small muted center">${last.exercises.length} Geräte vom ${shortDate(last.start)}, mit deinen letzten Werten</p>
+        <button class="btn block" data-action="start-session">Leeres Training starten</button>` : '<button class="btn primary big" data-action="start-session">Training starten</button>'}
       ${last ? `
         <section class="card">
           <h3 style="margin-top:0">Letztes Training</h3>
@@ -419,7 +437,7 @@
     const activeId = activeSetId(ex);
     const rows = ex.sets.map((s, i) => `
       <div class="set-row ${s.done ? 'done' : ''} ${s.id === activeId ? 'active' : ''}" data-set="${s.id}">
-        <span class="set-no">${i + 1}</span>
+        <span class="set-no">${i + 1}${sideOf(ex, i) ? `<small>${sideOf(ex, i)}</small>` : ''}</span>
         <label class="field"><input type="text" inputmode="decimal" enterkeyhint="next" data-field="weight" value="${fmtNum(s.weight)}" placeholder="–" aria-label="Gewicht Satz ${i + 1}"><span>kg</span></label>
         <label class="field"><input type="text" inputmode="numeric" enterkeyhint="done" data-field="reps" value="${s.reps ?? ''}" placeholder="–" aria-label="Wiederholungen Satz ${i + 1}"><span>Wdh.</span></label>
         <button class="check" data-action="toggle-set" aria-pressed="${s.done}" aria-label="Satz ${i + 1} erledigt">✓</button>
@@ -435,6 +453,7 @@
           <input type="text" data-exfield="setup" value="${esc(ex.setup)}" placeholder="z. B. Sitz 4, Lehne 2" autocomplete="off"></label>
         ${last ? `<p class="last">Letztes Mal (${shortDate(last.date)}): ${esc(exSummary(last.ex))}</p>` : ''}
         ${progressHint(ex.machineId)}
+        ${sided(ex) ? '<p class="small muted">L = links, R = rechts, abwechselnd</p>' : ''}
         <div class="sets">
           <div class="sets-head"><span></span><span>Gewicht</span><span>Wdh.</span><span>Fertig</span><span></span></div>
           ${rows}
@@ -528,6 +547,8 @@
           ? `<label>Art<select data-mfield="cardioType">${Object.entries(CARDIO_TYPES).map(([k, t]) => `<option value="${k}" ${k === m.cardioType ? 'selected' : ''}>${t.label}</option>`).join('')}</select></label>`
           : `<label>Pause<select data-mfield="rest">${restOptions(m.rest || state.settings.defaultRest)}</select></label>`}
         <label>Notiz<textarea data-mfield="note" placeholder="z. B. Griffposition, Hinweise">${esc(m.note || '')}</textarea></label>
+        ${m.kind === 'cardio' ? '' : `<label class="toggle"><span>Seitenweise trainieren<small>Sätze abwechselnd links / rechts beschriften</small></span>
+          <input type="checkbox" data-mfield="sides" ${m.sides ? 'checked' : ''}><i></i></label>`}
       </section>
       ${hist.length ? `
         <div class="stats">
@@ -535,10 +556,51 @@
           ${m.kind === 'cardio' ? '' : `<div><b>${best != null ? fmtNum(best) + ' kg' : '–'}</b><span>Bestes Gewicht</span></div>`}
           <div><b>${shortDate(hist[0].date)}</b><span>Zuletzt</span></div>
         </div>
+        ${machineChart(m, hist)}
         <section class="card"><h2>Verlauf</h2>
           ${hist.slice(0, 20).map((h) => `<div class="hist-row"><span>${shortDate(h.date)}</span><span>${esc(exSummary(h.ex))}</span></div>`).join('')}
         </section>` : '<p class="empty">Noch nicht trainiert.</p>'}
       <button class="btn danger-text" data-action="delete-machine" data-id="${m.id}">Gerät löschen</button>`;
+  }
+
+  // Line chart: best weight (or cardio minutes) per training, oldest to newest
+  function machineChart(m, hist) {
+    const cardio = m.kind === 'cardio';
+    const unit = cardio ? 'min' : 'kg';
+    const pts = hist.slice(0, 20).reverse().map((h) => {
+      let v = null;
+      if (cardio) v = h.ex.cardio?.minutes ?? null;
+      else for (const s of doneSets(h.ex.sets)) if (s.weight != null && (v == null || s.weight > v)) v = s.weight;
+      return { t: h.date, v };
+    }).filter((p) => p.v != null);
+    if (pts.length < 2) return '';
+    const W = 320, H = 150, L = 38, R = 16, T = 24, B = 24;
+    const vmin = Math.min(...pts.map((p) => p.v)), vmax = Math.max(...pts.map((p) => p.v));
+    const span = vmax - vmin || 10;
+    const y0 = vmin - span * 0.2, y1 = vmax + span * 0.2;
+    const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
+    const x = (t) => L + (t1 === t0 ? 0.5 : (t - t0) / (t1 - t0)) * (W - L - R);
+    const y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+    const f = (n) => Math.round(n * 10) / 10;
+    const ticks = vmin === vmax ? [vmin] : [vmin, vmax];
+    const first = pts[0], lastP = pts[pts.length - 1];
+    const diff = Math.round((lastP.v - first.v) * 100) / 100;
+    const cap = `${shortDate(first.t)}: ${fmtNum(first.v)} ${unit} → ${shortDate(lastP.t)}: ${fmtNum(lastP.v)} ${unit}${diff ? ` (${diff > 0 ? '+' : '−'}${fmtNum(Math.abs(diff))} ${unit})` : ' (gleich)'}`;
+    return `
+      <section class="card chart">
+        <h2>Entwicklung</h2>
+        <p class="small muted">${cardio ? 'Dauer' : 'Höchstes Gewicht'} je Training</p>
+        <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cap)}">
+          ${ticks.map((v) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${f(y(v))}" y2="${f(y(v))}"/><text class="tick" x="${L - 6}" y="${f(y(v)) + 4}" text-anchor="end">${fmtNum(v)}</text>`).join('')}
+          <text class="tick" x="${L}" y="${H - 6}">${shortDate(first.t)}</text>
+          <text class="tick" x="${W - R}" y="${H - 6}" text-anchor="end">${shortDate(lastP.t)}</text>
+          <polyline class="line" points="${pts.map((p) => f(x(p.t)) + ',' + f(y(p.v))).join(' ')}"/>
+          ${pts.map((p) => `<circle class="pt" cx="${f(x(p.t))}" cy="${f(y(p.v))}" r="4.5"/>`).join('')}
+          <text class="val" x="${W - R + 4}" y="${f(y(lastP.v)) - 10}" text-anchor="end">${fmtNum(lastP.v)} ${unit}</text>
+          ${pts.map((p) => `<circle class="hit" cx="${f(x(p.t))}" cy="${f(y(p.v))}" r="14" data-action="chart-pt" data-label="${esc(fmtDate(p.t) + ': ' + fmtNum(p.v) + ' ' + unit)}"/>`).join('')}
+        </svg>
+        <p class="chart-cap" id="chart-cap">${esc(cap)}</p>
+      </section>`;
   }
 
   function viewHistory() {
@@ -552,6 +614,7 @@
   function viewSessionDetail(id) {
     const s = state.sessions.find((x) => x.id === id);
     if (!s) return '<a class="back" href="#/verlauf">‹ Verlauf</a><p class="empty">Training nicht gefunden.</p>';
+    if (editId === id) return viewSessionEdit(s);
     const st = sessionStats(s);
     return `
       <a class="back" href="#/verlauf">‹ Verlauf</a>
@@ -577,10 +640,59 @@
           ${ex.setup || ex.effort ? `<p class="muted">${esc(ex.setup || '')}${ex.setup && ex.effort ? ' · ' : ''}${ex.effort ? EFFORTS[ex.effort] : ''}</p>` : ''}
           <table class="sets-table">
             <thead><tr><th>Satz</th><th>Gewicht</th><th>Wdh.</th><th>Pause</th></tr></thead>
-            <tbody>${ex.sets.map((x, i) => `<tr><td>${i + 1}</td><td>${x.weight != null ? fmtNum(x.weight) + ' kg' : '–'}</td><td>${x.reps ?? '–'}</td><td>${x.restTaken != null ? mmss(x.restTaken) : '–'}</td></tr>`).join('')}</tbody>
+            <tbody>${ex.sets.map((x, i) => `<tr><td>${i + 1}${sideOf(ex, i) ? ' · ' + SIDE_LABEL[sideOf(ex, i)] : ''}</td><td>${x.weight != null ? fmtNum(x.weight) + ' kg' : '–'}</td><td>${x.reps ?? '–'}</td><td>${x.restTaken != null ? mmss(x.restTaken) : '–'}</td></tr>`).join('')}</tbody>
           </table>
         </section>`).join('')}
+      ${state.active ? '' : `<button class="btn primary block" data-action="repeat-session" data-id="${s.id}">Dieses Training wiederholen</button>`}
+      <button class="btn block" data-action="edit-session" data-id="${s.id}">Bearbeiten</button>
       <button class="btn danger-text" data-action="delete-session" data-id="${s.id}">Training löschen</button>`;
+  }
+
+  // Edit a saved training: times, note, sets, machines
+  let editId = null;
+  function viewSessionEdit(s) {
+    return `
+      <div class="session-head">
+        <div><h1>Bearbeiten</h1><p class="muted">${fmtDate(s.start)}</p></div>
+        <button class="btn primary" data-action="edit-done">Fertig</button>
+      </div>
+      <section class="card form">
+        <label>Beginn<input type="datetime-local" data-hfield="start" value="${localInput(s.start)}"></label>
+        <label>Ende<input type="datetime-local" data-hfield="end" value="${localInput(s.end)}"></label>
+        <label>Notiz<textarea data-hfield="note" placeholder="z. B. müde, wenig geschlafen">${esc(s.note || '')}</textarea></label>
+      </section>
+      ${s.exercises.map((ex) => `
+        <section class="card" data-hex="${ex.id}">
+          <div class="ex-head"><h2>${esc(ex.name)}</h2>
+            <button class="icon-btn" data-action="h-del-ex" aria-label="${esc(ex.name)} aus diesem Training entfernen">×</button></div>
+          ${isCardio(ex) ? `
+            <div class="cfields">${(CARDIO_TYPES[ex.cardio?.type] || CARDIO_TYPES.stepper).fields.map((f) => {
+              const d = CARDIO_FIELDS[f];
+              return `<div class="cfield"><label><span>${d.label}</span><span class="field"><input type="text" inputmode="${d.mode}" data-hcfield="${f}" value="${fmtNum(ex.cardio?.[f])}" placeholder="–" aria-label="${d.label}"><span>${d.unit}</span></span></label></div>`;
+            }).join('')}</div>` : `
+            <div class="sets">
+              ${ex.sets.map((x, i) => `
+                <div class="set-row hrow" data-hset="${x.id}">
+                  <span class="set-no">${i + 1}${sideOf(ex, i) ? `<small>${sideOf(ex, i)}</small>` : ''}</span>
+                  <label class="field"><input type="text" inputmode="decimal" data-hfield="weight" value="${fmtNum(x.weight)}" placeholder="–" aria-label="Gewicht Satz ${i + 1}"><span>kg</span></label>
+                  <label class="field"><input type="text" inputmode="numeric" data-hfield="reps" value="${x.reps ?? ''}" placeholder="–" aria-label="Wiederholungen Satz ${i + 1}"><span>Wdh.</span></label>
+                  <button class="icon-btn" data-action="h-del-set" aria-label="Satz ${i + 1} löschen">×</button>
+                </div>`).join('')}
+            </div>
+            <div class="ex-foot"><button class="btn small" data-action="h-add-set">+ Satz</button></div>`}
+          <div class="effort"><span>Wie war's?</span>${Object.entries(EFFORTS).map(([k, l]) =>
+            `<button class="pill ${ex.effort === k ? 'on' : ''}" data-action="h-effort" data-v="${k}" aria-pressed="${ex.effort === k}">${l}</button>`).join('')}</div>
+        </section>`).join('')}
+      <button class="btn block" data-action="h-add-ex">+ Gerät hinzufügen</button>
+      <button class="btn primary big" data-action="edit-done">Fertig</button>`;
+  }
+  function editCtx(el) {
+    const s = state.sessions.find((x) => x.id === editId) || null;
+    const card = el.closest('[data-hex]');
+    const ex = s && card ? s.exercises.find((x) => x.id === card.dataset.hex) || null : null;
+    const row = el.closest('[data-hset]');
+    const set = ex && row ? ex.sets.find((x) => x.id === row.dataset.hset) || null : null;
+    return { s, ex, set };
   }
 
   const toggle = (key, label, sub = '') => `
@@ -600,7 +712,7 @@
         </section>` : ''}
       <section class="card">
         <h2>Daten exportieren</h2>
-        <p class="muted">${state.sessions.length} Trainings · ${state.machines.length} Geräte gespeichert.<br>${s.lastExport ? 'Letzter Export: ' + fmtDate(s.lastExport) + ', ' + fmtTime(s.lastExport) : 'Noch nie exportiert.'}</p>
+        <p class="muted">${state.sessions.length} Trainings · ${state.machines.length} Geräte gespeichert.<br>${s.lastExport ? 'Letzter Export: ' + fmtDate(s.lastExport) + ', ' + fmtTime(s.lastExport) : 'Noch nie exportiert.'}${pendingBackup().count ? `<br><b>${pendingBackup().count} ${pendingBackup().count === 1 ? 'Training' : 'Trainings'} noch nicht gesichert.</b>` : ''}</p>
         <button class="btn primary block" data-action="export">Exportieren (JSON)</button>
         <p class="small muted">Im Teilen-Menü „In Dateien sichern“ (iCloud Drive) oder AirDrop an den Mac wählen.</p>
         <label class="btn block file-btn">Backup importieren<input type="file" id="import-file" accept="application/json,.json" hidden></label>
@@ -647,6 +759,7 @@
     document.body.classList.add('sheet-open');
   }
   function closeSheet() {
+    pickerTarget = null;
     $('#sheet').hidden = true;
     document.body.classList.remove('sheet-open');
   }
@@ -661,8 +774,11 @@
 
   function lastUsed(machineId) { return lastPerformance(machineId)?.date || machineById(machineId)?.created || 0; }
 
-  function openPicker() {
-    const used = new Set(state.active.exercises.map((e) => e.machineId));
+  let pickerTarget = null; // id of the saved training being edited, null = running training
+  function openPicker(target = null) {
+    pickerTarget = target;
+    const into = target ? state.sessions.find((x) => x.id === target) : state.active;
+    const used = new Set(into.exercises.map((e) => e.machineId));
     const list = [...state.machines].sort((a, b) => lastUsed(b.id) - lastUsed(a.id));
     sheet(`
       <h2>Gerät hinzufügen</h2>
@@ -689,20 +805,50 @@
     return m;
   }
 
-  function addExercise(m) {
+  function buildExercise(m, done = false) {
     const last = lastPerformance(m.id);
     const sets = last && last.ex.sets.length
       ? last.ex.sets.map((s) => newSet(s.weight, s.reps))
       : [newSet(), newSet(), newSet()];
-    const ex = { id: uid(), machineId: m.id, name: m.name, setup: m.setup || '', rest: m.rest || state.settings.defaultRest, note: '', effort: null, sets };
+    if (done) sets.forEach((x) => { x.done = true; });
+    const ex = { id: uid(), machineId: m.id, name: m.name, setup: m.setup || '', rest: m.rest || state.settings.defaultRest, note: '', effort: null, ...(m.sides ? { sides: true } : {}), sets };
     if (m.kind === 'cardio') {
       const lastC = (last && last.ex.cardio) || {};
       const lc = lastC.log && lastC.log.length ? { ...lastC, ...lastC.log[0] } : lastC; // start values of last time
       ex.kind = 'cardio';
       ex.sets = [];
       ex.cardio = { type: m.cardioType || 'stepper', minutes: null, speed: lc.speed ?? null, incline: lc.incline ?? null,
-        level: lc.level ?? null, watts: lc.watts ?? null, startedAt: null, doneAt: null, done: false };
+        level: lc.level ?? null, watts: lc.watts ?? null, startedAt: null, doneAt: null, done };
     }
+    return ex;
+  }
+  function addToSession(m, sessionId) {
+    const s = state.sessions.find((x) => x.id === sessionId);
+    if (!s) return;
+    s.exercises.push(buildExercise(m, true));
+    save();
+    closeSheet();
+    render();
+  }
+  function startSession(fromId = null) {
+    unlockAudio();
+    const src = fromId ? state.sessions.find((x) => x.id === fromId) : null;
+    state.active = { id: uid(), start: Date.now(), end: null, exercises: [] };
+    state.timer = null;
+    let missing = 0;
+    for (const e of src ? src.exercises : []) {
+      const m = machineById(e.machineId);
+      if (m) state.active.exercises.push(buildExercise(m)); else missing++;
+    }
+    save();
+    updateWakeLock();
+    if (route().view !== 'training') location.hash = '#/training';
+    render();
+    if (!src) openPicker();
+    else toast(`${state.active.exercises.length} Geräte geladen${missing ? `, ${missing} gelöscht${missing === 1 ? 'es' : 'e'} übersprungen` : ''}`);
+  }
+  function addExercise(m) {
+    const ex = buildExercise(m);
     state.active.exercises.push(ex);
     save();
     closeSheet();
@@ -759,6 +905,7 @@
         restPlannedSec: e.rest,
         effort: e.effort || null,
         note: e.note || '',
+        ...(sided(e) ? { sides: true } : {}),
         ...(isCardio(e) && e.cardio ? { cardio: {
           type: e.cardio.type, minutes: e.cardio.minutes, speedKmh: e.cardio.speed, inclinePct: e.cardio.incline,
           level: e.cardio.level, watts: e.cardio.watts, startedAt: toIso(e.cardio.startedAt), doneAt: toIso(e.cardio.doneAt), done: !!e.cardio.done,
@@ -767,6 +914,7 @@
         sets: e.sets.map((x, i) => ({
           id: x.id,
           set: i + 1,
+          ...(sideOf(e, i) ? { side: sideOf(e, i) } : {}),
           weightKg: x.weight,
           reps: x.reps,
           done: !!x.done,
@@ -793,6 +941,7 @@
         rest: e.restPlannedSec ?? e.rest ?? state.settings.defaultRest,
         effort: e.effort || null,
         note: e.note || '',
+        ...(e.sides ? { sides: true } : {}),
         ...(e.kind === 'cardio' && e.cardio ? { cardio: {
           type: e.cardio.type || 'stepper', minutes: e.cardio.minutes ?? null, speed: e.cardio.speedKmh ?? e.cardio.speed ?? null,
           incline: e.cardio.inclinePct ?? e.cardio.incline ?? null, level: e.cardio.level ?? null, watts: e.cardio.watts ?? null,
@@ -812,9 +961,9 @@
     };
   }
   const serializeMachine = (m) => ({ id: m.id, name: m.name, kind: m.kind || 'strength', ...(m.kind === 'cardio' ? { cardioType: m.cardioType } : {}),
-    setup: m.setup || '', restSec: m.rest, note: m.note || '', created: toIso(m.created) });
+    setup: m.setup || '', restSec: m.rest, note: m.note || '', ...(m.sides != null ? { sides: !!m.sides } : {}), created: toIso(m.created) });
   const deserializeMachine = (m) => ({ id: m.id, name: m.name, ...(m.kind === 'cardio' ? { kind: 'cardio', cardioType: m.cardioType || 'stepper' } : {}),
-    setup: m.setup || '', rest: m.restSec ?? m.rest ?? state.settings.defaultRest, note: m.note || '', created: toMs(m.created) });
+    setup: m.setup || '', rest: m.restSec ?? m.rest ?? state.settings.defaultRest, note: m.note || '', ...(m.sides != null ? { sides: !!m.sides } : {}), created: toMs(m.created) });
 
   async function exportData() {
     const now = Date.now();
@@ -872,6 +1021,7 @@
         else if (JSON.stringify(state.sessions[idx]) !== JSON.stringify(s)) { state.sessions[idx] = s; updS++; }
       }
       state.sessions.sort((a, b) => a.start - b.start);
+      migrate(state);
       save();
       render();
       toast(`Import: ${addS} neue Trainings, ${updS} aktualisiert, ${addM} neue Geräte`);
@@ -896,16 +1046,59 @@
     const set = ex && row ? ex.sets.find((s) => s.id === row.dataset.set) : null;
 
     switch (action) {
-      case 'start-session':
-        unlockAudio();
-        state.active = { id: uid(), start: Date.now(), end: null, exercises: [] };
-        state.timer = null;
-        save();
-        updateWakeLock();
-        if (route().view !== 'training') location.hash = '#/training';
-        render();
-        openPicker();
+      case 'start-session': startSession(); break;
+      case 'repeat-session':
+        if (state.active) { toast('Es läuft schon ein Training'); return; }
+        startSession(btn.dataset.id);
         break;
+      case 'edit-session': editId = btn.dataset.id; lastRouteKey = ''; render(); break;
+      case 'edit-done': {
+        const { s } = editCtx(btn);
+        if (s) s.exercises = s.exercises.filter((x) => isCardio(x) || x.sets.length);
+        editId = null;
+        save(); lastRouteKey = ''; render();
+        toast('Änderungen gespeichert');
+        break;
+      }
+      case 'h-add-ex': if (editId) openPicker(editId); break;
+      case 'h-del-ex': {
+        const { s, ex: hx } = editCtx(btn);
+        if (hx && confirm(`„${hx.name}“ aus diesem Training entfernen?`)) {
+          s.exercises = s.exercises.filter((x) => x !== hx);
+          save(); render();
+        }
+        break;
+      }
+      case 'h-add-set': {
+        const { ex: hx } = editCtx(btn);
+        if (!hx) return;
+        const l = hx.sets[hx.sets.length - 1];
+        hx.sets.push({ ...newSet(l?.weight ?? null, l?.reps ?? null), done: true });
+        save(); render();
+        break;
+      }
+      case 'h-del-set': {
+        const { ex: hx, set: hs } = editCtx(btn);
+        if (!hs) return;
+        hx.sets.splice(hx.sets.indexOf(hs), 1);
+        save(); render();
+        break;
+      }
+      case 'h-effort': {
+        const { ex: hx } = editCtx(btn);
+        if (!hx) return;
+        hx.effort = hx.effort === btn.dataset.v ? null : btn.dataset.v;
+        save(); render();
+        break;
+      }
+      case 'chart-pt': {
+        const cap = $('#chart-cap');
+        if (cap) cap.textContent = btn.dataset.label;
+        document.querySelectorAll('.chart .pt.sel').forEach((c) => c.classList.remove('sel'));
+        const i = [...btn.parentNode.querySelectorAll('.hit')].indexOf(btn);
+        btn.parentNode.querySelectorAll('.pt')[i]?.classList.add('sel');
+        break;
+      }
       case 'finish-session': finishSession(); break;
       case 'discard-session':
         if (confirm('Training verwerfen? Alle Einträge dieses Trainings gehen verloren.')) {
@@ -916,7 +1109,8 @@
       case 'close-sheet': closeSheet(); break;
       case 'pick-machine': {
         const m = machineById(btn.dataset.id);
-        if (m) addExercise(m);
+        if (m && pickerTarget) addToSession(m, pickerTarget);
+        else if (m) addExercise(m);
         break;
       }
       case 'toggle-set': {
@@ -1093,6 +1287,32 @@
       save();
       return;
     }
+    if (el.dataset.hfield || el.dataset.hcfield) {
+      const { s, ex, set } = editCtx(el);
+      if (!s) return;
+      const f = el.dataset.hfield;
+      if (el.dataset.hcfield) {
+        if (!ex || !ex.cardio) return;
+        ex.cardio[el.dataset.hcfield] = num(el.value);
+        el.value = fmtNum(ex.cardio[el.dataset.hcfield]);
+      } else if (set) {
+        if (f === 'weight') { set.weight = num(el.value); el.value = fmtNum(set.weight); }
+        else { const v = num(el.value); set.reps = v == null ? null : Math.round(v); el.value = set.reps ?? ''; }
+      } else if (f === 'note') {
+        s.note = el.value.trim();
+      } else {
+        const t = new Date(el.value).getTime();
+        if (!Number.isFinite(t)) { render(); return; }
+        if (f === 'start') { s.end = t + (s.end - s.start); s.start = t; } // keep the duration
+        else if (t > s.start) s.end = t;
+        else toast('Das Ende muss nach dem Beginn liegen');
+        state.sessions.sort((a, b) => a.start - b.start);
+        save(); render();
+        return;
+      }
+      save();
+      return;
+    }
     if (el.dataset.sessionfield && state.active) {
       state.active[el.dataset.sessionfield] = el.value.trim();
       save();
@@ -1114,6 +1334,7 @@
       if (!m) return;
       const f = el.dataset.mfield;
       if (f === 'rest') m.rest = parseInt(el.value, 10);
+      else if (f === 'sides') m.sides = el.checked;
       else if (f === 'cardioType') m.cardioType = el.value;
       else if (f === 'name') { if (el.value.trim()) m.name = el.value.trim(); }
       else m[f] = el.value.trim();
@@ -1165,7 +1386,8 @@
     const m = createMachine(name, setup, String(fd.get('kind') || 'kraft'));
     if (setup && !m.setup) m.setup = setup;
     save();
-    if (kind === 'new-machine' && state.active) addExercise(m);
+    if (kind === 'new-machine' && pickerTarget) addToSession(m, pickerTarget);
+    else if (kind === 'new-machine' && state.active) addExercise(m);
     else { render(); toast(`„${m.name}“ angelegt`); }
   });
 

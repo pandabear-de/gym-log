@@ -29,7 +29,7 @@ Die App lädt die neue Version im Hintergrund; sie ist beim übernächsten Öffn
     "id", "source": "import (nur übernommene Altdaten)", "start", "end", "durationMin", "note",
     "exercises": [{
       "machineId", "machine", "kind", "setup", "restPlannedSec", "effort": "easy|ok|hard|null", "note",
-      "sets": [{ "set", "weightKg", "reps", "done", "doneAt", "restPlannedSec", "restTakenSec" }],
+      "sets": [{ "set", "side"?: "L|R", "weightKg", "reps", "done", "doneAt", "restPlannedSec", "restTakenSec" }],
       "cardio": { "type", "minutes", "speedKmh", "inclinePct", "level", "watts", "startedAt", "doneAt", "done",
                   "log": [{ "at", "speedKmh", "inclinePct", "level", "watts" }] }
     }]
@@ -40,6 +40,7 @@ Die App lädt die neue Version im Hintergrund; sie ist beim übernächsten Öffn
 - `restTakenSec` = tatsächlich gelaufene Pause (bis Ablauf oder „Weiter“).
 - `cardio` nur bei `kind: "cardio"`; `sets` ist dann leer. Hauptfelder = Endwerte. `log` = jede Änderung während der Einheit mit Zeitstempel (Segment gilt bis zum nächsten `at` bzw. `doneAt`; Änderungen innerhalb von 20 s werden zusammengefasst). Laufband: Tempo + Steigung, Rad/Stepper: Stufe.
 - `effort` = eigenes Empfinden pro Gerät (leicht / passend / schwer).
+- `side` = nur bei seitenweise trainierten Geräten (`sides: true`): Sätze abwechselnd links (`L`) / rechts (`R`).
 
 ## Lokal testen
 ```

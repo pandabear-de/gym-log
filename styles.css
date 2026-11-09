@@ -114,7 +114,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; }
 .ex-head h2 { font-size: 21px; overflow-wrap: anywhere; }
 .setup { display: block; margin-top: 10px; }
 .setup span { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
-input[type=text], input[type=search], select, textarea {
+input[type=text], input[type=search], input[type=datetime-local], select, textarea {
   width: 100%; font: inherit; font-size: 17px; color: var(--text);
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 12px; padding: 11px 12px; outline: none;
@@ -304,3 +304,22 @@ table.sets-table { width: 100%; border-collapse: collapse; margin-top: 10px; fon
 .cfield label > span:first-child { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
 .cstep { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
 .cstep .step { min-height: 38px; font-size: 20px; }
+
+/* Left/right sets, history editing, start screen */
+.set-no small { font-size: 11px; margin-left: 1px; color: var(--accent); }
+.set-row.hrow { grid-template-columns: 26px 1fr 1fr 30px; }
+.center { text-align: center; }
+.form label.toggle { display: flex; font-size: 16px; color: var(--text); border-top: none; margin-top: 8px; padding-bottom: 0; }
+input[type=datetime-local] { min-height: 46px; display: block; }
+.card.warn small { color: var(--muted); }
+
+/* Progress chart */
+.chart svg { display: block; width: 100%; height: auto; margin-top: 8px; overflow: visible; }
+.chart .grid { stroke: var(--border); stroke-width: 1; }
+.chart .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .pt { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.chart .pt.sel { fill: var(--surface); stroke: var(--accent); stroke-width: 3; }
+.chart .val { fill: var(--text); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.chart .hit { fill: transparent; cursor: pointer; }
+.chart-cap { font-size: 14px; color: var(--muted); margin: 8px 0 0; font-variant-numeric: tabular-nums; }
