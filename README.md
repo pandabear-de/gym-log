@@ -25,8 +25,9 @@ Die App lädt die neue Version im Hintergrund; sie ist beim übernächsten Öffn
   "app": "gym-log", "schemaVersion": 1, "exportedAt": "ISO-8601 UTC",
   "machines": [{ "id", "name", "kind": "strength|cardio", "cardioType": "laufband|rad|stepper",
                  "setup", "restSec", "note", "created" }],
+  "plans": [{ "id", "name", "machineIds": ["Reihenfolge = Trainingsreihenfolge"], "created" }],
   "sessions": [{
-    "id", "source": "import (nur übernommene Altdaten)", "start", "end", "durationMin", "note",
+    "id", "source": "import (nur übernommene Altdaten)", "start", "end", "durationMin", "note", "planId", "plan": "Name des Plans (falls über Plan gestartet)",
     "exercises": [{
       "machineId", "machine", "kind", "setup", "restPlannedSec", "effort": "easy|ok|hard|null", "note",
       "sets": [{ "set", "side"?: "L|R", "weightKg", "reps", "done", "doneAt", "restPlannedSec", "restTakenSec" }],

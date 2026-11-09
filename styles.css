@@ -323,3 +323,9 @@ input[type=datetime-local] { min-height: 46px; display: block; }
 .chart .val { fill: var(--text); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .chart .hit { fill: transparent; cursor: pointer; }
 .chart-cap { font-size: 14px; color: var(--muted); margin: 8px 0 0; font-variant-numeric: tabular-nums; }
+
+/* Plans */
+.row-btns { display: flex; gap: 4px; flex: none; }
+.plan-row { cursor: default; }
+.icon-btn:disabled { opacity: .3; }
+a.btn.small { flex: none; }

@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.5.0';
+  const APP_VERSION = '1.6.0';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -34,6 +34,7 @@
     return {
       schemaVersion: 1,
       machines: [],
+      plans: [],
       sessions: [],
       active: null,
       timer: null,
@@ -77,6 +78,18 @@
   try { navigator.storage?.persist?.(); } catch (e) { /* ignore */ }
 
   const machineById = (id) => state.machines.find((m) => m.id === id);
+  const planById = (id) => state.plans.find((p) => p.id === id);
+  const planMachines = (p) => p.machineIds.map(machineById).filter(Boolean);
+  function nextPlanName() {
+    for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') if (!state.plans.some((p) => p.name === 'Plan ' + c)) return 'Plan ' + c;
+    return 'Plan';
+  }
+  function createPlan(machineIds = []) {
+    const p = { id: uid(), name: nextPlanName(), machineIds: [...new Set(machineIds)].filter(machineById), created: Date.now() };
+    state.plans.push(p);
+    save();
+    location.hash = '#/plan/' + p.id;
+  }
   const findEx = (exId) => state.active?.exercises.find((e) => e.id === exId) || null;
   const findSet = (exId, setId) => {
     const ex = findEx(exId);
@@ -322,6 +335,7 @@
       case 'geraete': html = r.id ? viewMachine(r.id) : viewMachines(); break;
       case 'verlauf': html = r.id ? viewSessionDetail(r.id) : viewHistory(); break;
       case 'mehr': html = viewSettings(); break;
+      case 'plan': html = viewPlan(r.id); break;
       default: html = state.active ? viewSession() : viewStart();
     }
     const key = r.view + '/' + (r.id || '') + (state.active ? '/a' : '');
@@ -329,7 +343,7 @@
     $('#app').innerHTML = html;
     if (key === lastRouteKey) window.scrollTo(0, y); else window.scrollTo(0, 0);
     lastRouteKey = key;
-    document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === r.view));
+    document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === (r.view === 'plan' ? 'training' : r.view)));
     updateTimerUI();
     updateElapsed();
   }
@@ -351,10 +365,21 @@
     return `
       <h1>Training</h1>
       ${exportReminder()}
+      ${state.plans.map((p) => {
+        const used = [...state.sessions].reverse().find((x) => x.planId === p.id);
+        const n = planMachines(p).length;
+        return `
+        <section class="card">
+          <div class="ex-head"><h2>${esc(p.name)}</h2><a class="btn small" href="#/plan/${p.id}">Ändern</a></div>
+          <p class="small muted">${n} ${n === 1 ? 'Gerät' : 'Geräte'}${used ? ' · zuletzt ' + shortDate(used.start) : ''}</p>
+          <button class="btn primary block" data-action="start-plan" data-id="${p.id}">${esc(p.name)} starten</button>
+        </section>`;
+      }).join('')}
       ${last ? `
-        <button class="btn primary big" data-action="repeat-session" data-id="${last.id}">Wie letztes Mal starten</button>
-        <p class="small muted center">${last.exercises.length} Geräte vom ${shortDate(last.start)}, mit deinen letzten Werten</p>
-        <button class="btn block" data-action="start-session">Leeres Training starten</button>` : '<button class="btn primary big" data-action="start-session">Training starten</button>'}
+        <button class="btn ${state.plans.length ? 'block' : 'primary big'}" data-action="repeat-session" data-id="${last.id}">Wie letztes Mal starten</button>
+        <p class="small muted center">${last.exercises.length === 1 ? '1 Gerät' : last.exercises.length + ' Geräte'} vom ${shortDate(last.start)}, mit deinen letzten Werten</p>
+        <button class="btn block" data-action="start-session">Leeres Training starten</button>` : `<button class="btn ${state.plans.length ? 'block' : 'primary big'}" data-action="start-session">${state.plans.length ? 'Leeres Training starten' : 'Training starten'}</button>`}
+      <button class="btn block" data-action="new-plan">+ Neuer Plan (z. B. A und B)</button>
       ${last ? `
         <section class="card">
           <h3 style="margin-top:0">Letztes Training</h3>
@@ -377,7 +402,7 @@
     const a = state.active;
     return `
       <div class="session-head">
-        <div><h1>Training</h1><p class="muted">seit ${fmtTime(a.start)} · <span id="elapsed"></span></p></div>
+        <div><h1>Training</h1><p class="muted">${a.planName ? esc(a.planName) + ' · ' : ''}seit ${fmtTime(a.start)} · <span id="elapsed"></span></p></div>
         <button class="btn" data-action="finish-session">Beenden</button>
       </div>
       ${a.exercises.length ? a.exercises.map(exerciseCard).join('') : '<p class="empty">Noch kein Gerät. Füge das erste hinzu.</p>'}
@@ -603,11 +628,37 @@
       </section>`;
   }
 
+  // Training plan (e.g. A / B): a named, ordered list of machines
+  function viewPlan(id) {
+    const p = planById(id);
+    if (!p) return '<a class="back" href="#/training">‹ Training</a><p class="empty">Plan nicht gefunden.</p>';
+    const list = planMachines(p);
+    return `
+      <a class="back" href="#/training">‹ Training</a>
+      <h1>${esc(p.name)}</h1>
+      <section class="card form" data-plan="${p.id}">
+        <label>Name<input type="text" data-pfield="name" value="${esc(p.name)}" placeholder="z. B. Plan A, Beine, Oberkörper" autocomplete="off"></label>
+      </section>
+      ${list.length ? `<div class="list">${list.map((m, i) => {
+        const last = lastPerformance(m.id);
+        return `<div class="list-item plan-row" data-mid="${m.id}">
+          <span><b>${i + 1}. ${esc(m.name)}</b><small>${last ? esc(exSummary(last.ex)) : esc(m.setup || 'Noch nicht trainiert')}</small></span>
+          <span class="row-btns">
+            <button class="icon-btn" data-action="plan-up" ${i === 0 ? 'disabled' : ''} aria-label="${esc(m.name)} nach oben">↑</button>
+            <button class="icon-btn" data-action="plan-down" ${i === list.length - 1 ? 'disabled' : ''} aria-label="${esc(m.name)} nach unten">↓</button>
+            <button class="icon-btn" data-action="plan-remove" aria-label="${esc(m.name)} aus dem Plan entfernen">×</button>
+          </span></div>`;
+      }).join('')}</div>` : '<p class="empty">Noch keine Geräte in diesem Plan.</p>'}
+      <button class="btn ${list.length ? 'block' : 'primary big'}" data-action="plan-add">Geräte auswählen</button>
+      ${list.length && !state.active ? `<button class="btn primary big" data-action="start-plan" data-id="${p.id}">${esc(p.name)} starten</button>` : ''}
+      <button class="btn danger-text" data-action="delete-plan">Plan löschen</button>`;
+  }
+
   function viewHistory() {
     if (!state.sessions.length) return '<h1>Verlauf</h1><p class="empty">Noch keine Trainings gespeichert.</p>';
     return `<h1>Verlauf</h1>${exportReminder()}<div class="list">${[...state.sessions].reverse().map((s) => {
       const st = sessionStats(s);
-      return `<a class="list-item" href="#/verlauf/${s.id}"><span><b>${fmtDate(s.start)}</b><small>${fmtTime(s.start)} · ${fmtDur(s.end - s.start)} · ${s.exercises.length} Geräte · ${st.sets} Sätze · ${fmtKg(st.volume)}</small></span><i>›</i></a>`;
+      return `<a class="list-item" href="#/verlauf/${s.id}"><span><b>${fmtDate(s.start)}</b><small>${s.planName ? esc(s.planName) + ' · ' : ''}${fmtTime(s.start)} · ${fmtDur(s.end - s.start)} · ${s.exercises.length} Geräte · ${st.sets} Sätze · ${fmtKg(st.volume)}</small></span><i>›</i></a>`;
     }).join('')}</div>`;
   }
 
@@ -619,7 +670,7 @@
     return `
       <a class="back" href="#/verlauf">‹ Verlauf</a>
       <h1>${fmtDate(s.start)}</h1>
-      <p class="muted">${fmtTime(s.start)} – ${fmtTime(s.end)}</p>
+      <p class="muted">${s.planName ? esc(s.planName) + ' · ' : ''}${fmtTime(s.start)} – ${fmtTime(s.end)}</p>
       <div class="stats">
         <div><b>${fmtDur(s.end - s.start)}</b><span>Dauer</span></div>
         <div><b>${st.sets}</b><span>Sätze</span></div>
@@ -644,6 +695,7 @@
           </table>
         </section>`).join('')}
       ${state.active ? '' : `<button class="btn primary block" data-action="repeat-session" data-id="${s.id}">Dieses Training wiederholen</button>`}
+      <button class="btn block" data-action="save-plan" data-id="${s.id}">Geräte als Plan speichern</button>
       <button class="btn block" data-action="edit-session" data-id="${s.id}">Bearbeiten</button>
       <button class="btn danger-text" data-action="delete-session" data-id="${s.id}">Training löschen</button>`;
   }
@@ -777,15 +829,17 @@
   let pickerTarget = null; // id of the saved training being edited, null = running training
   function openPicker(target = null) {
     pickerTarget = target;
-    const into = target ? state.sessions.find((x) => x.id === target) : state.active;
-    const used = new Set(into.exercises.map((e) => e.machineId));
+    const plan = target && target.startsWith('plan:') ? planById(target.slice(5)) : null;
+    const into = plan ? null : target ? state.sessions.find((x) => x.id === target) : state.active;
+    const used = new Set(plan ? plan.machineIds : into.exercises.map((e) => e.machineId));
     const list = [...state.machines].sort((a, b) => lastUsed(b.id) - lastUsed(a.id));
     sheet(`
-      <h2>Gerät hinzufügen</h2>
+      <h2>${plan ? 'Geräte für ' + esc(plan.name) : 'Gerät hinzufügen'}</h2>
+      ${plan ? '<p class="small muted">Antippen fügt hinzu oder entfernt. Reihenfolge = Reihenfolge des Antippens.</p>' : ''}
       ${list.length > 6 ? '<input type="search" id="picker-search" placeholder="Suchen…" autocomplete="off">' : ''}
       ${list.length ? `<div class="list" id="picker-list">${list.map((m) => `
         <button class="list-item" data-action="pick-machine" data-id="${m.id}" data-name="${esc(m.name.toLowerCase())}">
-          <span><b>${esc(m.name)}</b><small>${m.kind === 'cardio' ? 'Cardio · ' + (CARDIO_TYPES[m.cardioType]?.label || '') + (m.setup ? ' · ' : '') : ''}${esc(m.setup || '')}</small></span>${used.has(m.id) ? '<em>schon dabei</em>' : '<i>+</i>'}
+          <span><b>${esc(m.name)}</b><small>${m.kind === 'cardio' ? 'Cardio · ' + (CARDIO_TYPES[m.cardioType]?.label || '') + (m.setup ? ' · ' : '') : ''}${esc(m.setup || '')}</small></span>${used.has(m.id) ? `<em>${plan ? '✓ im Plan' : 'schon dabei'}</em>` : '<i>+</i>'}
         </button>`).join('')}</div>` : ''}
       <h3>Neues Gerät</h3>
       <form class="inline-form" data-form="new-machine">
@@ -793,7 +847,24 @@
         <input type="text" name="setup" placeholder="Einstellung, z. B. Sitz 4, Lehne 2" autocomplete="off">
         ${kindSelect()}
         <button class="btn primary" type="submit">Anlegen &amp; hinzufügen</button>
-      </form>`);
+      </form>
+      ${plan ? '<button class="btn primary big" data-action="close-sheet">Fertig</button>' : ''}`);
+  }
+  function pickInto(m) {
+    const t = pickerTarget;
+    if (t && t.startsWith('plan:')) {
+      const p = planById(t.slice(5));
+      if (!p) return;
+      if (p.machineIds.includes(m.id)) p.machineIds = p.machineIds.filter((x) => x !== m.id);
+      else p.machineIds.push(m.id);
+      save();
+      const panel = $('.sheet-panel');
+      const y = panel.scrollTop;
+      render();
+      openPicker(t);
+      panel.scrollTop = y;
+    } else if (t) addToSession(m, t);
+    else if (state.active) addExercise(m);
   }
 
   function createMachine(name, setup, kind = 'kraft') {
@@ -830,22 +901,24 @@
     closeSheet();
     render();
   }
-  function startSession(fromId = null) {
+  function startSession(fromId = null, planId = null) {
     unlockAudio();
     const src = fromId ? state.sessions.find((x) => x.id === fromId) : null;
-    state.active = { id: uid(), start: Date.now(), end: null, exercises: [] };
+    const plan = planById(planId || (src && src.planId)) || null;
+    const ids = planId && plan ? plan.machineIds : src ? src.exercises.map((e) => e.machineId) : [];
+    state.active = { id: uid(), start: Date.now(), end: null, ...(plan ? { planId: plan.id, planName: plan.name } : {}), exercises: [] };
     state.timer = null;
     let missing = 0;
-    for (const e of src ? src.exercises : []) {
-      const m = machineById(e.machineId);
+    for (const id of ids) {
+      const m = machineById(id);
       if (m) state.active.exercises.push(buildExercise(m)); else missing++;
     }
     save();
     updateWakeLock();
     if (route().view !== 'training') location.hash = '#/training';
     render();
-    if (!src) openPicker();
-    else toast(`${state.active.exercises.length} Geräte geladen${missing ? `, ${missing} gelöscht${missing === 1 ? 'es' : 'e'} übersprungen` : ''}`);
+    if (!ids.length) openPicker();
+    else toast(`${plan ? plan.name + ': ' : ''}${state.active.exercises.length === 1 ? '1 Gerät' : state.active.exercises.length + ' Geräte'} geladen${missing ? `, ${missing} gelöscht${missing === 1 ? 'es' : 'e'} übersprungen` : ''}`);
   }
   function addExercise(m) {
     const ex = buildExercise(m);
@@ -877,6 +950,11 @@
     a.exercises = a.exercises
       .map((e) => (isCardio(e) ? e : { ...e, sets: doneSets(e.sets) }))
       .filter(exDone);
+    const plan = a.planId ? planById(a.planId) : null;
+    if (plan) {
+      const extra = [...new Set(a.exercises.map((e) => e.machineId))].filter((id) => machineById(id) && !plan.machineIds.includes(id));
+      if (extra.length && confirm(`${extra.length === 1 ? '1 Gerät war' : extra.length + ' Geräte waren'} heute neu dabei. In „${plan.name}“ aufnehmen?`)) plan.machineIds.push(...extra);
+    }
     state.sessions.push(a);
     state.sessions.sort((x, y) => x.start - y.start);
     state.active = null;
@@ -892,6 +970,7 @@
     return {
       id: s.id,
       ...(s.source ? { source: s.source } : {}),
+      ...(s.planId ? { planId: s.planId, plan: s.planName || '' } : {}),
       start: toIso(s.start),
       end: toIso(s.end),
       durationMin: s.end ? Math.round((s.end - s.start) / 60000) : null,
@@ -929,6 +1008,7 @@
     return {
       id: s.id || uid(),
       ...(s.source ? { source: s.source } : {}),
+      ...(s.planId ? { planId: s.planId, planName: s.plan ?? s.planName ?? '' } : {}),
       start: toMs(s.start),
       end: toMs(s.end),
       note: s.note || '',
@@ -974,6 +1054,7 @@
       exportedAt: toIso(now),
       units: { weight: 'kg', rest: 'seconds', time: 'ISO 8601 UTC' },
       machines: state.machines.map(serializeMachine),
+      plans: state.plans.map((p) => ({ id: p.id, name: p.name, machineIds: p.machineIds, created: toIso(p.created) })),
       sessions: state.sessions.map(serializeSession),
       activeSession: state.active ? serializeSession(state.active) : null,
     };
@@ -1013,6 +1094,9 @@
         if (!have) { state.machines.push(deserializeMachine(m)); addM++; }
         else if (!have.note && m.note) have.note = m.note;
       }
+      for (const p of Array.isArray(data.plans) ? data.plans : []) {
+        if (p && p.id && p.name && !planById(p.id)) state.plans.push({ id: p.id, name: p.name, machineIds: (p.machineIds || []).slice(), created: toMs(p.created) });
+      }
       for (const raw of data.sessions) {
         const s = deserializeSession(raw);
         if (!s.start) continue;
@@ -1050,6 +1134,37 @@
       case 'repeat-session':
         if (state.active) { toast('Es läuft schon ein Training'); return; }
         startSession(btn.dataset.id);
+        break;
+      case 'start-plan':
+        if (state.active) { toast('Es läuft schon ein Training'); return; }
+        startSession(null, btn.dataset.id);
+        break;
+      case 'new-plan': createPlan(); break;
+      case 'save-plan': {
+        const src = state.sessions.find((x) => x.id === btn.dataset.id);
+        if (src) createPlan(src.exercises.map((x) => x.machineId));
+        break;
+      }
+      case 'plan-add': openPicker('plan:' + route().id); break;
+      case 'plan-up':
+      case 'plan-down':
+      case 'plan-remove': {
+        const p = planById(route().id);
+        const mid = btn.closest('[data-mid]')?.dataset.mid;
+        if (!p || !mid) return;
+        p.machineIds = p.machineIds.filter(machineById);
+        const i = p.machineIds.indexOf(mid);
+        const j = action === 'plan-up' ? i - 1 : i + 1;
+        if (action === 'plan-remove') p.machineIds.splice(i, 1);
+        else if (i >= 0 && j >= 0 && j < p.machineIds.length) [p.machineIds[i], p.machineIds[j]] = [p.machineIds[j], p.machineIds[i]];
+        save(); render();
+        break;
+      }
+      case 'delete-plan':
+        if (confirm('Plan löschen? Trainings und Geräte bleiben erhalten.')) {
+          state.plans = state.plans.filter((p) => p.id !== route().id);
+          save(); location.hash = '#/training';
+        }
         break;
       case 'edit-session': editId = btn.dataset.id; lastRouteKey = ''; render(); break;
       case 'edit-done': {
@@ -1109,8 +1224,7 @@
       case 'close-sheet': closeSheet(); break;
       case 'pick-machine': {
         const m = machineById(btn.dataset.id);
-        if (m && pickerTarget) addToSession(m, pickerTarget);
-        else if (m) addExercise(m);
+        if (m) pickInto(m);
         break;
       }
       case 'toggle-set': {
@@ -1313,6 +1427,14 @@
       save();
       return;
     }
+    if (el.dataset.pfield) {
+      const p = planById(el.closest('[data-plan]').dataset.plan);
+      if (!p) return;
+      if (el.value.trim()) p.name = el.value.trim();
+      save(); render();
+      toast('Gespeichert');
+      return;
+    }
     if (el.dataset.sessionfield && state.active) {
       state.active[el.dataset.sessionfield] = el.value.trim();
       save();
@@ -1386,8 +1508,7 @@
     const m = createMachine(name, setup, String(fd.get('kind') || 'kraft'));
     if (setup && !m.setup) m.setup = setup;
     save();
-    if (kind === 'new-machine' && pickerTarget) addToSession(m, pickerTarget);
-    else if (kind === 'new-machine' && state.active) addExercise(m);
+    if (kind === 'new-machine' && (pickerTarget || state.active)) pickInto(m);
     else { render(); toast(`„${m.name}“ angelegt`); }
   });
 
