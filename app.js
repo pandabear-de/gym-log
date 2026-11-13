@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.7.0';
+  const APP_VERSION = '1.7.1';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -134,7 +134,8 @@
   const CARDIO_TYPES = {
     laufband: { label: 'Laufband', fields: ['minutes', 'speed', 'incline'] },
     rad: { label: 'Rad / Ergometer', fields: ['minutes', 'level'] },
-    stepper: { label: 'Stepper / Crosstrainer', fields: ['minutes', 'level'] },
+    crosstrainer: { label: 'Crosstrainer', fields: ['minutes', 'level'] },
+    stepper: { label: 'Stepper', fields: ['minutes', 'level'] },
   };
   const CARDIO_FIELDS = {
     minutes: { label: 'Dauer', unit: 'min', mode: 'decimal' },
@@ -542,7 +543,7 @@
   }
 
   function viewMachines() {
-    const list = [...state.machines].sort((a, b) => a.name.localeCompare(b.name, 'de'));
+    const list = [...state.machines].sort(byKindThenName);
     return `
       <h1>Geräte</h1>
       <section class="card">
@@ -555,7 +556,7 @@
       </section>
       ${list.length ? `<div class="list">${list.map((m) => {
         const last = lastPerformance(m.id);
-        return `<a class="list-item" href="#/geraete/${m.id}"><span><b>${esc(m.name)}</b><small>${esc(m.setup || 'Keine Einstellung')}${last ? ' · zuletzt ' + shortDate(last.date) : ''}</small></span><i>›</i></a>`;
+        return `<a class="list-item" href="#/geraete/${m.id}"><span><b>${esc(m.name)}</b><small>${m.kind === 'cardio' ? 'Cardio · ' + (CARDIO_TYPES[m.cardioType]?.label || '') : esc(m.setup || 'Keine Einstellung')}${last ? ' · zuletzt ' + shortDate(last.date) : ''}</small></span><i>›</i></a>`;
       }).join('')}</div>` : '<p class="empty">Noch keine Geräte. Du kannst sie auch direkt im Training anlegen.</p>'}`;
   }
 
@@ -827,7 +828,8 @@
     toastTimer = setTimeout(() => { t.hidden = true; }, 2600);
   }
 
-  function lastUsed(machineId) { return lastPerformance(machineId)?.date || machineById(machineId)?.created || 0; }
+  // Machine lists: cardio first, then everything A–Z
+  const byKindThenName = (a, b) => (a.kind === 'cardio' ? 0 : 1) - (b.kind === 'cardio' ? 0 : 1) || a.name.localeCompare(b.name, 'de');
 
   let pickerTarget = null; // id of the saved training being edited, null = running training
   function openPicker(target = null) {
@@ -835,10 +837,10 @@
     const plan = target && target.startsWith('plan:') ? planById(target.slice(5)) : null;
     const into = plan ? null : target ? state.sessions.find((x) => x.id === target) : state.active;
     const used = new Set(plan ? plan.machineIds : into.exercises.map((e) => e.machineId));
-    const list = [...state.machines].sort((a, b) => lastUsed(b.id) - lastUsed(a.id));
+    const list = [...state.machines].sort(byKindThenName);
     sheet(`
       <h2>${plan ? 'Geräte für ' + esc(plan.name) : 'Gerät hinzufügen'}</h2>
-      ${!target && state.active ? '<button class="btn block cardio-short" data-action="open-cardio">Cardio hinzufügen (Laufband, Rad, Stepper)</button>' : ''}
+      ${!target && state.active ? '<button class="btn block cardio-short" data-action="open-cardio">Cardio hinzufügen (Laufband, Rad, Crosstrainer …)</button>' : ''}
       ${plan ? '<p class="small muted">Antippen fügt hinzu oder entfernt. Reihenfolge = Reihenfolge des Antippens.</p>' : ''}
       ${list.length > 6 ? '<input type="search" id="picker-search" placeholder="Suchen…" autocomplete="off">' : ''}
       ${list.length ? `<div class="list" id="picker-list">${list.map((m) => `
@@ -855,12 +857,12 @@
       ${plan ? '<button class="btn primary big" data-action="close-sheet">Fertig</button>' : ''}`);
   }
   // Short way to cardio in the running training: saved cardio machines, or one tap per type for a new one
-  const CARDIO_QUICK = { laufband: 'Laufband', rad: 'Rad', stepper: 'Stepper' };
+  const CARDIO_QUICK = { laufband: 'Laufband', rad: 'Rad', crosstrainer: 'Crosstrainer', stepper: 'Stepper' };
   function openCardioPicker() {
     if (!state.active) return;
     pickerTarget = null;
     const used = new Set(state.active.exercises.map((e) => e.machineId));
-    const list = state.machines.filter((m) => m.kind === 'cardio').sort((a, b) => lastUsed(b.id) - lastUsed(a.id));
+    const list = state.machines.filter((m) => m.kind === 'cardio').sort(byKindThenName);
     sheet(`
       <h2>Cardio hinzufügen</h2>
       ${list.length ? `<div class="list">${list.map((m) => `

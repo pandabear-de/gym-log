@@ -23,7 +23,7 @@ Die App lädt die neue Version im Hintergrund; sie ist beim übernächsten Öffn
 ```json
 {
   "app": "gym-log", "schemaVersion": 1, "exportedAt": "ISO-8601 UTC",
-  "machines": [{ "id", "name", "kind": "strength|cardio", "cardioType": "laufband|rad|stepper",
+  "machines": [{ "id", "name", "kind": "strength|cardio", "cardioType": "laufband|rad|crosstrainer|stepper",
                  "setup", "restSec", "note", "created" }],
   "plans": [{ "id", "name", "machineIds": ["Reihenfolge = Trainingsreihenfolge"], "created" }],
   "sessions": [{
@@ -39,7 +39,7 @@ Die App lädt die neue Version im Hintergrund; sie ist beim übernächsten Öffn
 }
 ```
 - `restTakenSec` = tatsächlich gelaufene Pause (bis Ablauf oder „Weiter“).
-- `cardio` nur bei `kind: "cardio"`; `sets` ist dann leer. Hauptfelder = Endwerte. `log` = jede Änderung während der Einheit mit Zeitstempel (Segment gilt bis zum nächsten `at` bzw. `doneAt`; Änderungen innerhalb von 20 s werden zusammengefasst). Laufband: Tempo + Steigung, Rad/Stepper: Stufe.
+- `cardio` nur bei `kind: "cardio"`; `sets` ist dann leer. Hauptfelder = Endwerte. `log` = jede Änderung während der Einheit mit Zeitstempel (Segment gilt bis zum nächsten `at` bzw. `doneAt`; Änderungen innerhalb von 20 s werden zusammengefasst). Laufband: Tempo + Steigung, Rad/Crosstrainer/Stepper: Stufe.
 - `effort` = eigenes Empfinden pro Gerät (leicht / passend / schwer).
 - `side` = nur bei seitenweise trainierten Geräten (`sides: true`): Sätze abwechselnd links (`L`) / rechts (`R`).
 

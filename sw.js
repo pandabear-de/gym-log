@@ -1,5 +1,5 @@
 // Offline cache: serve from cache instantly, refresh in background (new version shows on next launch).
-const CACHE = 'gymlog-v8';
+const CACHE = 'gymlog-v9';
 const ASSETS = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'];
 
