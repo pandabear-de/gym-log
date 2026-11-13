@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.6.0';
+  const APP_VERSION = '1.7.0';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -406,7 +406,10 @@
         <button class="btn" data-action="finish-session">Beenden</button>
       </div>
       ${a.exercises.length ? a.exercises.map(exerciseCard).join('') : '<p class="empty">Noch kein Gerät. Füge das erste hinzu.</p>'}
-      <button class="btn primary big" data-action="open-picker">+ Gerät hinzufügen</button>
+      <div class="add-row">
+        <button class="btn primary big" data-action="open-picker">+ Gerät</button>
+        <button class="btn big" data-action="open-cardio">+ Cardio</button>
+      </div>
       <section class="card">
         <label class="setup"><span>Notiz zum Training (optional)</span>
           <textarea data-sessionfield="note" placeholder="z. B. müde, wenig geschlafen, Rücken zwickt">${esc(a.note || '')}</textarea></label>
@@ -835,6 +838,7 @@
     const list = [...state.machines].sort((a, b) => lastUsed(b.id) - lastUsed(a.id));
     sheet(`
       <h2>${plan ? 'Geräte für ' + esc(plan.name) : 'Gerät hinzufügen'}</h2>
+      ${!target && state.active ? '<button class="btn block cardio-short" data-action="open-cardio">Cardio hinzufügen (Laufband, Rad, Stepper)</button>' : ''}
       ${plan ? '<p class="small muted">Antippen fügt hinzu oder entfernt. Reihenfolge = Reihenfolge des Antippens.</p>' : ''}
       ${list.length > 6 ? '<input type="search" id="picker-search" placeholder="Suchen…" autocomplete="off">' : ''}
       ${list.length ? `<div class="list" id="picker-list">${list.map((m) => `
@@ -850,6 +854,25 @@
       </form>
       ${plan ? '<button class="btn primary big" data-action="close-sheet">Fertig</button>' : ''}`);
   }
+  // Short way to cardio in the running training: saved cardio machines, or one tap per type for a new one
+  const CARDIO_QUICK = { laufband: 'Laufband', rad: 'Rad', stepper: 'Stepper' };
+  function openCardioPicker() {
+    if (!state.active) return;
+    pickerTarget = null;
+    const used = new Set(state.active.exercises.map((e) => e.machineId));
+    const list = state.machines.filter((m) => m.kind === 'cardio').sort((a, b) => lastUsed(b.id) - lastUsed(a.id));
+    sheet(`
+      <h2>Cardio hinzufügen</h2>
+      ${list.length ? `<div class="list">${list.map((m) => `
+        <button class="list-item" data-action="pick-machine" data-id="${m.id}">
+          <span><b>${esc(m.name)}</b><small>${CARDIO_TYPES[m.cardioType]?.label || 'Cardio'}${m.setup ? ' · ' + esc(m.setup) : ''}</small></span>${used.has(m.id) ? '<em>schon dabei</em>' : '<i>+</i>'}
+        </button>`).join('')}</div>` : ''}
+      <h3>${list.length ? 'Anderes Gerät' : 'Welches Gerät?'}</h3>
+      <div class="cardio-quick">${Object.entries(CARDIO_QUICK).map(([k, l]) =>
+        `<button class="btn" data-action="new-cardio" data-type="${k}">${l}</button>`).join('')}</div>
+      <p class="small muted">Tempo, Steigung oder Stufe trägst du danach direkt auf der Karte ein.</p>`);
+  }
+
   function pickInto(m) {
     const t = pickerTarget;
     if (t && t.startsWith('plan:')) {
@@ -1087,12 +1110,17 @@
     try {
       const data = JSON.parse(await file.text());
       if (!Array.isArray(data.sessions) || !Array.isArray(data.machines)) throw new Error('format');
-      let addM = 0, addS = 0, updS = 0;
+      let addM = 0, addS = 0, updS = 0, renM = 0;
+      const renamed = new Map();
       for (const m of data.machines) {
         if (!m || !m.id || !m.name) continue;
         const have = machineById(m.id);
         if (!have) { state.machines.push(deserializeMachine(m)); addM++; }
-        else if (!have.note && m.note) have.note = m.note;
+        else {
+          if (!have.note && m.note) have.note = m.note;
+          // the file's name wins, so a backup with corrected names can be imported
+          if (String(m.name).trim() !== have.name) { have.name = String(m.name).trim(); renamed.set(have.id, have.name); renM++; }
+        }
       }
       for (const p of Array.isArray(data.plans) ? data.plans : []) {
         if (p && p.id && p.name && !planById(p.id)) state.plans.push({ id: p.id, name: p.name, machineIds: (p.machineIds || []).slice(), created: toMs(p.created) });
@@ -1104,11 +1132,15 @@
         if (idx < 0) { state.sessions.push(s); addS++; }
         else if (JSON.stringify(state.sessions[idx]) !== JSON.stringify(s)) { state.sessions[idx] = s; updS++; }
       }
+      if (renamed.size) {
+        for (const s of [...state.sessions, ...(state.active ? [state.active] : [])])
+          for (const ex of s.exercises) if (renamed.has(ex.machineId)) ex.name = renamed.get(ex.machineId);
+      }
       state.sessions.sort((a, b) => a.start - b.start);
       migrate(state);
       save();
       render();
-      toast(`Import: ${addS} neue Trainings, ${updS} aktualisiert, ${addM} neue Geräte`);
+      toast(`Import: ${addS} neue Trainings, ${updS} aktualisiert, ${addM} neue Geräte${renM ? `, ${renM} umbenannt` : ''}`);
     } catch (e) {
       toast('Import fehlgeschlagen – keine gültige Gym-Log-Datei');
     }
@@ -1221,6 +1253,16 @@
         }
         break;
       case 'open-picker': openPicker(); break;
+      case 'open-cardio': openCardioPicker(); break;
+      case 'new-cardio': {
+        if (!state.active || !CARDIO_QUICK[btn.dataset.type]) return;
+        const type = btn.dataset.type;
+        let name = CARDIO_QUICK[type];
+        const taken = state.machines.find((x) => x.name.trim().toLowerCase() === name.toLowerCase());
+        if (taken && (taken.kind !== 'cardio' || taken.cardioType !== type)) name += ' (Cardio)';
+        addExercise(createMachine(name, '', type));
+        break;
+      }
       case 'close-sheet': closeSheet(); break;
       case 'pick-machine': {
         const m = machineById(btn.dataset.id);

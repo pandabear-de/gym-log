@@ -329,3 +329,10 @@ input[type=datetime-local] { min-height: 46px; display: block; }
 .plan-row { cursor: default; }
 .icon-btn:disabled { opacity: .3; }
 a.btn.small { flex: none; }
+
+/* Add row in the running training: machine + cardio side by side */
+.add-row { display: flex; gap: 10px; }
+.add-row .btn.big { flex: 1; width: auto; padding: 0 10px; }
+.cardio-quick { display: flex; gap: 8px; margin-bottom: 10px; }
+.cardio-quick .btn { flex: 1; min-height: 54px; padding: 0 6px; }
+.btn.cardio-short { margin: 0 0 12px; }
