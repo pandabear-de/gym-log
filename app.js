@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.7.1';
+  const APP_VERSION = '1.7.2';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -857,7 +857,9 @@
       ${plan ? '<button class="btn primary big" data-action="close-sheet">Fertig</button>' : ''}`);
   }
   // Short way to cardio in the running training: saved cardio machines, or one tap per type for a new one
-  const CARDIO_QUICK = { laufband: 'Laufband', rad: 'Rad', crosstrainer: 'Crosstrainer', stepper: 'Stepper' };
+  const CARDIO_QUICK = { laufband: 'Laufband', rad: 'Rad', liegerad: 'Liegerad', crosstrainer: 'Crosstrainer', stepper: 'Stepper' };
+  // quick buttons that are their own machine but share another type's fields (Liegerad = Rad, Stufe only)
+  const CARDIO_QUICK_TYPE = { liegerad: 'rad' };
   function openCardioPicker() {
     if (!state.active) return;
     pickerTarget = null;
@@ -1258,8 +1260,8 @@
       case 'open-cardio': openCardioPicker(); break;
       case 'new-cardio': {
         if (!state.active || !CARDIO_QUICK[btn.dataset.type]) return;
-        const type = btn.dataset.type;
-        let name = CARDIO_QUICK[type];
+        let name = CARDIO_QUICK[btn.dataset.type];
+        const type = CARDIO_QUICK_TYPE[btn.dataset.type] || btn.dataset.type;
         const taken = state.machines.find((x) => x.name.trim().toLowerCase() === name.toLowerCase());
         if (taken && (taken.kind !== 'cardio' || taken.cardioType !== type)) name += ' (Cardio)';
         addExercise(createMachine(name, '', type));
