@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.7.2';
+  const APP_VERSION = '1.8.0';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -831,6 +831,33 @@
   // Machine lists: cardio first, then everything A–Z
   const byKindThenName = (a, b) => (a.kind === 'cardio' ? 0 : 1) - (b.kind === 'cardio' ? 0 : 1) || a.name.localeCompare(b.name, 'de');
 
+  // Strength machines left out of recent trainings more often than the others (e.g. because they were occupied).
+  // Looks at the last MISS_WINDOW saved trainings that contain strength work; a training only counts for a machine
+  // from its first use on, and machines unused for MISS_KNOWN such trainings count as retired.
+  const MISS_WINDOW = 4, MISS_KNOWN = 8;
+  function missedLately() {
+    const strength = state.sessions.filter((s) => s.exercises.some((e) => !isCardio(e)));
+    const known = strength.slice(-MISS_KNOWN);
+    const recent = strength.slice(-MISS_WINDOW);
+    const out = new Map();
+    if (recent.length < 2) return out;
+    const stats = [];
+    for (const m of state.machines) {
+      if (m.kind === 'cardio') continue;
+      const has = (s) => s.exercises.some((e) => e.machineId === m.id);
+      if (!known.some(has)) continue;
+      const first = strength.findIndex(has);
+      const since = recent.filter((s) => strength.indexOf(s) >= first);
+      if (since.length < 2) continue;
+      stats.push({ id: m.id, missed: since.filter((s) => !has(s)).length, of: since.length });
+    }
+    if (!stats.length) return out;
+    const sorted = stats.map((x) => x.missed).sort((a, b) => a - b);
+    const median = sorted[Math.floor((sorted.length - 1) / 2)];
+    for (const x of stats) if (x.missed > median) out.set(x.id, x);
+    return out;
+  }
+
   let pickerTarget = null; // id of the saved training being edited, null = running training
   function openPicker(target = null) {
     pickerTarget = target;
@@ -838,6 +865,11 @@
     const into = plan ? null : target ? state.sessions.find((x) => x.id === target) : state.active;
     const used = new Set(plan ? plan.machineIds : into.exercises.map((e) => e.machineId));
     const list = [...state.machines].sort(byKindThenName);
+    const missed = !target && state.active ? missedLately() : new Map();
+    const missNote = (m) => {
+      const x = !used.has(m.id) && missed.get(m.id);
+      return x ? `<small class="missed">Fehlte in ${x.missed} der letzten ${x.of} Trainings</small>` : '';
+    };
     sheet(`
       <h2>${plan ? 'Geräte für ' + esc(plan.name) : 'Gerät hinzufügen'}</h2>
       ${!target && state.active ? '<button class="btn block cardio-short" data-action="open-cardio">Cardio hinzufügen (Laufband, Rad, Crosstrainer …)</button>' : ''}
@@ -845,7 +877,7 @@
       ${list.length > 6 ? '<input type="search" id="picker-search" placeholder="Suchen…" autocomplete="off">' : ''}
       ${list.length ? `<div class="list" id="picker-list">${list.map((m) => `
         <button class="list-item" data-action="pick-machine" data-id="${m.id}" data-name="${esc(m.name.toLowerCase())}">
-          <span><b>${esc(m.name)}</b><small>${m.kind === 'cardio' ? 'Cardio · ' + (CARDIO_TYPES[m.cardioType]?.label || '') + (m.setup ? ' · ' : '') : ''}${esc(m.setup || '')}</small></span>${used.has(m.id) ? `<em>${plan ? '✓ im Plan' : 'schon dabei'}</em>` : '<i>+</i>'}
+          <span><b>${esc(m.name)}</b><small>${m.kind === 'cardio' ? 'Cardio · ' + (CARDIO_TYPES[m.cardioType]?.label || '') + (m.setup ? ' · ' : '') : ''}${esc(m.setup || '')}</small>${missNote(m)}</span>${used.has(m.id) ? `<em>${plan ? '✓ im Plan' : 'schon dabei'}</em>` : '<i>+</i>'}
         </button>`).join('')}</div>` : ''}
       <h3>Neues Gerät</h3>
       <form class="inline-form" data-form="new-machine">
@@ -1093,7 +1125,7 @@
       const file = new File([json], name, { type });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         try {
-          await navigator.share({ files: [file], title: name });
+          await navigator.share({ files: [file] }); // no title/text: iOS "In Dateien sichern" would save it as an extra Text.txt
           mark();
         } catch (e) {
           if (e.name !== 'AbortError') toast('Teilen fehlgeschlagen');
