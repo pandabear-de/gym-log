@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.10.0';
+  const APP_VERSION = '1.11.0';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -112,6 +112,37 @@
     const last = [...state.sessions].reverse().find((s) => s.planId && plans.some((p) => p.id === s.planId));
     if (!last) return plans[0].id;
     return plans[(plans.findIndex((p) => p.id === last.planId) + 1) % plans.length].id;
+  }
+  // Typical time one strength set costs (set + rest + walking to the next machine): the gaps between ticked sets
+  // in recent trainings. Gaps over 5 min (waiting, app forgotten) are left out. Per machine once it has 2 gaps.
+  function setTimes() {
+    const per = {}, all = [];
+    for (const s of state.sessions.slice(-12)) {
+      const ev = [];
+      for (const ex of s.exercises) if (!isCardio(ex)) for (const x of ex.sets) if (x.done && x.doneAt) ev.push({ t: x.doneAt, m: ex.machineId });
+      ev.sort((a, b) => a.t - b.t);
+      for (let i = 1; i < ev.length; i++) {
+        const g = (ev[i].t - ev[i - 1].t) / 1000;
+        if (g < 15 || g > 300) continue;
+        (per[ev[i].m] = per[ev[i].m] || []).push(g);
+        all.push(g);
+      }
+    }
+    const med = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
+    const out = {};
+    for (const [k, v] of Object.entries(per)) if (v.length >= 2) out[k] = med(v);
+    return { per: out, all: all.length >= 5 ? med(all) : null };
+  }
+  // Estimated minutes for a plan: sets from last time × the machine's typical set time, cardio = last duration
+  function planMinutes(p, T = setTimes()) {
+    let sec = 0;
+    for (const m of planMachines(p)) {
+      const last = lastPerformance(m.id);
+      if (m.kind === 'cardio') { sec += (last?.ex.cardio?.minutes ?? 15) * 60 + 60; continue; }
+      const n = last && last.ex.sets.length ? last.ex.sets.length : 3;
+      sec += n * (T.per[m.id] ?? T.all ?? (m.rest || state.settings.defaultRest) + 45);
+    }
+    return sec ? Math.max(5, Math.round(sec / 300) * 5) : 0;
   }
   // Record: heavier than ever before on this machine, or the same top weight with more reps.
   // Earlier sets of the running training raise the bar, so only the set that beats them gets the badge.
@@ -431,6 +462,7 @@
     const last = state.sessions[state.sessions.length - 1];
     const due = duePlanId();
     const plans = due ? [planById(due), ...state.plans.filter((p) => p.id !== due)] : state.plans;
+    const times = setTimes();
     return `
       <h1>Training</h1>
       ${exportReminder()}
@@ -441,7 +473,7 @@
         return `
         <section class="card ${due && isDue ? 'due' : ''}">
           <div class="ex-head"><h2>${esc(p.name)}${due && isDue ? ' <span class="due-badge">Als Nächstes</span>' : ''}</h2><a class="btn small" href="#/plan/${p.id}">Ändern</a></div>
-          <p class="small muted">${n} ${n === 1 ? 'Gerät' : 'Geräte'}${used ? ' · zuletzt ' + shortDate(used.start) : ''}</p>
+          <p class="small muted">${n} ${n === 1 ? 'Gerät' : 'Geräte'}${planMinutes(p, times) ? ` · ca. ${planMinutes(p, times)} min` : ''}${used ? ' · zuletzt ' + shortDate(used.start) : ''}</p>
           <button class="btn ${isDue ? 'primary' : ''} block" data-action="start-plan" data-id="${p.id}">${esc(p.name)} starten</button>
         </section>`;
       }).join('')}
@@ -730,6 +762,7 @@
     return `
       <a class="back" href="#/training">‹ Training</a>
       <h1>${esc(p.name)}</h1>
+      ${planMinutes(p) ? `<p class="muted">Dauer ca. ${planMinutes(p)} min (aus deinen letzten Trainings)</p>` : ''}
       <section class="card form" data-plan="${p.id}">
         <label>Name<input type="text" data-pfield="name" value="${esc(p.name)}" placeholder="z. B. Plan A, Beine, Oberkörper" autocomplete="off"></label>
       </section>
