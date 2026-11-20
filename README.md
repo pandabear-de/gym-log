@@ -24,7 +24,7 @@ Die App lädt die neue Version im Hintergrund; sie ist beim übernächsten Öffn
 {
   "app": "gym-log", "schemaVersion": 1, "exportedAt": "ISO-8601 UTC",
   "machines": [{ "id", "name", "kind": "strength|cardio", "cardioType": "laufband|rad|crosstrainer|stepper",
-                 "setup", "restSec", "note", "created" }],
+                 "setup", "restSec", "note", "sides"?, "repRange"?: { "min", "max" }, "created" }],
   "plans": [{ "id", "name", "machineIds": ["Reihenfolge = Trainingsreihenfolge"], "created" }],
   "sessions": [{
     "id", "source": "import (nur übernommene Altdaten)", "start", "end", "durationMin", "note", "planId", "plan": "Name des Plans (falls über Plan gestartet)",
@@ -41,6 +41,7 @@ Die App lädt die neue Version im Hintergrund; sie ist beim übernächsten Öffn
 - `restTakenSec` = tatsächlich gelaufene Pause (bis Ablauf oder „Weiter“).
 - `cardio` nur bei `kind: "cardio"`; `sets` ist dann leer. Hauptfelder = Endwerte. `log` = jede Änderung während der Einheit mit Zeitstempel (Segment gilt bis zum nächsten `at` bzw. `doneAt`; Änderungen innerhalb von 20 s werden zusammengefasst). Laufband: Tempo + Steigung, Rad/Crosstrainer/Stepper: Stufe.
 - `effort` = eigenes Empfinden pro Gerät (leicht / passend / schwer).
+- `repRange` (ab 1.9.0) = Ziel-Wiederholungen pro Gerät. Hatte ein Satz beim letzten Mal die obere Zahl, startet er beim nächsten Mal mit einer Schrittweite (Einstellung der −/+ Tasten) mehr und der unteren Zahl („Doppelte Progression“, pro Satz, damit Pyramiden funktionieren).
 - `side` = nur bei seitenweise trainierten Geräten (`sides: true`): Sätze abwechselnd links (`L`) / rechts (`R`).
 
 ## Lokal testen

@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.8.0';
+  const APP_VERSION = '1.9.0';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -78,6 +78,21 @@
   try { navigator.storage?.persist?.(); } catch (e) { /* ignore */ }
 
   const machineById = (id) => state.machines.find((m) => m.id === id);
+  const stepFor = () => state.settings.weightStep || 5;
+  const round2 = (n) => Math.round(n * 100) / 100;
+  // Rep target per machine (e.g. 10–15): a set that reached the top goes up one step next time
+  const repRange = (m) => (m && m.repMin && m.repMax && m.repMax > m.repMin ? [m.repMin, m.repMax] : null);
+  function progression(m, lastEx) {
+    const rr = repRange(m);
+    if (!rr || !lastEx || !lastEx.sets.length) return null;
+    const step = stepFor();
+    const ups = [];
+    const sets = lastEx.sets.map((s, i) => {
+      if (s.weight != null && s.reps != null && s.reps >= rr[1]) { ups.push(i); return newSet(round2(s.weight + step), rr[0]); }
+      return newSet(s.weight, s.reps);
+    });
+    return ups.length ? { sets, ups, rr, step } : null;
+  }
   const planById = (id) => state.plans.find((p) => p.id === id);
   const planMachines = (p) => p.machineIds.map(machineById).filter(Boolean);
   function nextPlanName() {
@@ -428,6 +443,16 @@
     const twice = h.length > 1 && h[1].ex.effort === 'easy';
     return `<p class="hint-line">💡 ${twice ? '2× in Folge leicht' : 'Letztes Mal leicht'} – heute steigern?</p>`;
   }
+  // Why today's weights are higher: which sets hit the top of the rep target last time
+  function progressionHint(ex) {
+    const p = ex.progress;
+    const n = p.ups.length;
+    const which = n === p.total ? (n === 1 ? 'Der Satz' : `Alle ${n} Sätze`) : n === 1 ? `Satz ${p.ups[0] + 1}` : `Sätze ${p.ups.map((i) => i + 1).join(' und ')}`;
+    return `<div class="progress-hint">
+        <p>⬆ ${which} letztes Mal mit ${p.rr[1]} Wdh. (Ziel ${p.rr[0]}–${p.rr[1]}) → heute +${fmtNum(p.step)} kg, ${p.rr[0]} Wdh.</p>
+        <button class="btn small" data-action="undo-progress">Wie letztes Mal</button>
+      </div>`;
+  }
   function cardioCard(ex) {
     const c = ex.cardio;
     const t = CARDIO_TYPES[c.type] || CARDIO_TYPES.stepper;
@@ -472,6 +497,8 @@
         <button class="check" data-action="toggle-set" aria-pressed="${s.done}" aria-label="Satz ${i + 1} erledigt">✓</button>
         <button class="icon-btn" data-action="delete-set" aria-label="Satz ${i + 1} löschen">×</button>
       </div>${s.id === activeId ? stepperBar(s.id) : ''}`).join('');
+    const started = ex.sets.some((s) => s.done);
+    const rr = repRange(machineById(ex.machineId));
     return `
       <section class="card exercise ${allDone ? 'all-done' : ''}" id="ex-${ex.id}" data-ex="${ex.id}">
         <div class="ex-head">
@@ -481,10 +508,10 @@
         <label class="setup"><span>Einstellung</span>
           <input type="text" data-exfield="setup" value="${esc(ex.setup)}" placeholder="z. B. Sitz 4, Lehne 2" autocomplete="off"></label>
         ${last ? `<p class="last">Letztes Mal (${shortDate(last.date)}): ${esc(exSummary(last.ex))}</p>` : ''}
-        ${progressHint(ex.machineId)}
+        ${ex.progress && !started ? progressionHint(ex) : progressHint(ex.machineId)}
         ${sided(ex) ? '<p class="small muted">L = links, R = rechts, abwechselnd</p>' : ''}
         <div class="sets">
-          <div class="sets-head"><span></span><span>Gewicht</span><span>Wdh.</span><span>Fertig</span><span></span></div>
+          <div class="sets-head"><span></span><span>Gewicht</span><span>Wdh.${rr ? ` ${rr[0]}–${rr[1]}` : ''}</span><span>Fertig</span><span></span></div>
           ${rows}
         </div>
         <div class="ex-foot">
@@ -579,6 +606,12 @@
         ${m.kind === 'cardio' ? '' : `<label class="toggle"><span>Seitenweise trainieren<small>Sätze abwechselnd links / rechts beschriften</small></span>
           <input type="checkbox" data-mfield="sides" ${m.sides ? 'checked' : ''}><i></i></label>`}
       </section>
+      ${m.kind === 'cardio' ? '' : `
+      <section class="card form" data-machine="${m.id}">
+        <h2>Steigerung</h2>
+        <div class="setting-row"><span>Ziel-Wiederholungen<small>Schafft ein Satz die obere Zahl, schlägt die App beim nächsten Mal mehr Gewicht vor.</small></span>
+          <span class="range-inputs"><input type="text" inputmode="numeric" data-mfield="repMin" value="${m.repMin ?? ''}" placeholder="10" aria-label="Wiederholungen von">–<input type="text" inputmode="numeric" data-mfield="repMax" value="${m.repMax ?? ''}" placeholder="15" aria-label="Wiederholungen bis"></span></div>
+      </section>`}
       ${hist.length ? `
         <div class="stats">
           <div><b>${hist.length}</b><span>Trainings</span></div>
@@ -937,11 +970,14 @@
 
   function buildExercise(m, done = false) {
     const last = lastPerformance(m.id);
-    const sets = last && last.ex.sets.length
-      ? last.ex.sets.map((s) => newSet(s.weight, s.reps))
-      : [newSet(), newSet(), newSet()];
+    const prog = !done && m.kind !== 'cardio' ? progression(m, last?.ex) : null;
+    const sets = prog ? prog.sets
+      : last && last.ex.sets.length
+        ? last.ex.sets.map((s) => newSet(s.weight, s.reps))
+        : [newSet(), newSet(), newSet()];
     if (done) sets.forEach((x) => { x.done = true; });
     const ex = { id: uid(), machineId: m.id, name: m.name, setup: m.setup || '', rest: m.rest || state.settings.defaultRest, note: '', effort: null, ...(m.sides ? { sides: true } : {}), sets };
+    if (prog) ex.progress = { ups: prog.ups, total: prog.sets.length, rr: prog.rr, step: prog.step };
     if (m.kind === 'cardio') {
       const lastC = (last && last.ex.cardio) || {};
       const lc = lastC.log && lastC.log.length ? { ...lastC, ...lastC.log[0] } : lastC; // start values of last time
@@ -1007,7 +1043,7 @@
     state.timer = null;
     a.end = Date.now();
     a.exercises = a.exercises
-      .map((e) => (isCardio(e) ? e : { ...e, sets: doneSets(e.sets) }))
+      .map((e) => { const { progress, ...rest } = e; return isCardio(rest) ? rest : { ...rest, sets: doneSets(rest.sets) }; })
       .filter(exDone);
     const plan = a.planId ? planById(a.planId) : null;
     if (plan) {
@@ -1100,9 +1136,13 @@
     };
   }
   const serializeMachine = (m) => ({ id: m.id, name: m.name, kind: m.kind || 'strength', ...(m.kind === 'cardio' ? { cardioType: m.cardioType } : {}),
-    setup: m.setup || '', restSec: m.rest, note: m.note || '', ...(m.sides != null ? { sides: !!m.sides } : {}), created: toIso(m.created) });
+    setup: m.setup || '', restSec: m.rest, note: m.note || '', ...(m.sides != null ? { sides: !!m.sides } : {}),
+    ...(repRange(m) ? { repRange: { min: m.repMin, max: m.repMax } } : {}), created: toIso(m.created) });
+  // rep target from a file: only filled in when the phone has none
+  const machineExtras = (m) => (m.repRange?.min && m.repRange?.max ? { repMin: m.repRange.min, repMax: m.repRange.max } : {});
   const deserializeMachine = (m) => ({ id: m.id, name: m.name, ...(m.kind === 'cardio' ? { kind: 'cardio', cardioType: m.cardioType || 'stepper' } : {}),
-    setup: m.setup || '', rest: m.restSec ?? m.rest ?? state.settings.defaultRest, note: m.note || '', ...(m.sides != null ? { sides: !!m.sides } : {}), created: toMs(m.created) });
+    setup: m.setup || '', rest: m.restSec ?? m.rest ?? state.settings.defaultRest, note: m.note || '', ...(m.sides != null ? { sides: !!m.sides } : {}),
+    ...machineExtras(m), created: toMs(m.created) });
 
   async function exportData() {
     const now = Date.now();
@@ -1154,6 +1194,8 @@
         if (!have) { state.machines.push(deserializeMachine(m)); addM++; }
         else {
           if (!have.note && m.note) have.note = m.note;
+          const extras = machineExtras(m);
+          if (!repRange(have) && extras.repMin) { have.repMin = extras.repMin; have.repMax = extras.repMax; }
           // the file's name wins, so a backup with corrected names can be imported
           if (String(m.name).trim() !== have.name) { have.name = String(m.name).trim(); renamed.set(have.id, have.name); renM++; }
         }
@@ -1300,6 +1342,15 @@
         break;
       }
       case 'close-sheet': closeSheet(); break;
+      case 'undo-progress': {
+        const last = ex && lastPerformance(ex.machineId);
+        if (!last || ex.sets.some((s) => s.done)) return;
+        ex.sets = last.ex.sets.map((s) => newSet(s.weight, s.reps));
+        delete ex.progress;
+        delete selectedByEx[ex.id];
+        save(); render();
+        break;
+      }
       case 'pick-machine': {
         const m = machineById(btn.dataset.id);
         if (m) pickInto(m);
@@ -1536,6 +1587,12 @@
       if (f === 'rest') m.rest = parseInt(el.value, 10);
       else if (f === 'sides') m.sides = el.checked;
       else if (f === 'cardioType') m.cardioType = el.value;
+      else if (f === 'repMin' || f === 'repMax') {
+        const v = num(el.value);
+        m[f] = v && v > 0 ? Math.round(v) : null;
+        el.value = m[f] ?? '';
+        if (m.repMin && m.repMax && m.repMax <= m.repMin) { save(); toast('„bis“ muss größer als „von“ sein'); return; }
+      }
       else if (f === 'name') { if (el.value.trim()) m.name = el.value.trim(); }
       else m[f] = el.value.trim();
       save();

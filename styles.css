@@ -337,3 +337,12 @@ a.btn.small { flex: none; }
 .cardio-quick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
 .cardio-quick .btn { flex: 1; min-height: 54px; padding: 0 6px; }
 .btn.cardio-short { margin: 0 0 12px; }
+
+/* 1.9.0: Ziel-Wiederholungen */
+.setting-row small { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
+.setting-row + .setting-row { border-top: 1px solid var(--border); }
+.range-inputs { display: flex; align-items: center; gap: 6px; flex: none; }
+.range-inputs input { width: 56px; text-align: center; }
+.progress-hint { display: flex; align-items: center; gap: 10px; margin: 8px 0 0; }
+.progress-hint p { margin: 0; flex: 1; font-size: 14px; color: var(--accent); font-weight: 600; }
+.progress-hint .btn { flex: none; }
