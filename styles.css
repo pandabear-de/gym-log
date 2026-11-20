@@ -346,3 +346,16 @@ a.btn.small { flex: none; }
 .progress-hint { display: flex; align-items: center; gap: 10px; margin: 8px 0 0; }
 .progress-hint p { margin: 0; flex: 1; font-size: 14px; color: var(--accent); font-weight: 600; }
 .progress-hint .btn { flex: none; }
+
+/* 1.10.0: Plan-Wechsel, Rekord, Körperbereiche, Wischen */
+.card.due { border: 2px solid var(--accent); }
+.due-badge { display: inline-block; vertical-align: middle; font-size: 12px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 999px; padding: 2px 8px; margin-left: 6px; }
+.set-row.record .check[aria-pressed=true] { background: #e0a100; border-color: #e0a100; font-size: 22px; }
+.area-row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid var(--border); }
+.area-row:first-of-type { border-top: none; }
+.area-row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.area-row.late b { color: var(--danger, #d64545); }
+.set-row { border-radius: 12px; }
+.set-row.swipe-del { background: rgba(214, 69, 69, .18); }
+.set-row.swipe-copy { background: rgba(46, 160, 90, .18); }
+.toast-btn { margin-left: 10px; background: transparent; color: inherit; border: 1.5px solid currentColor; border-radius: 10px; padding: 4px 10px; font: inherit; font-weight: 700; cursor: pointer; }

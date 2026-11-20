@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const STORE_KEY = 'gymlog.v1';
-  const APP_VERSION = '1.9.0';
+  const APP_VERSION = '1.10.0';
   const DAY = 86400000;
 
   // ---------- helpers ----------
@@ -93,8 +93,40 @@
     });
     return ups.length ? { sets, ups, rr, step } : null;
   }
+  // Body areas, same keyword rules as the fitness report (fitness_report/analysis.py); a machine can override with m.area
+  const AREAS = { legs: 'Beine', back: 'Rücken', chest_shoulders: 'Brust & Schultern', core: 'Rumpf' };
+  const AREA_WORDS = [
+    ['legs', ['leg', 'abduct', 'adduct', 'abduk', 'adduk', 'glute', 'calf', 'squat', 'bein', 'wade']],
+    ['back', ['pulldown', 'upper back', 'lower back', 'row', 'rücken', 'ruder', 'lat']],
+    ['chest_shoulders', ['chest', 'shoulder', 'fly', 'pec', 'brust', 'schulter', 'dip', 'tricep', 'trizeps', 'bicep', 'bizeps', 'arm']],
+    ['core', ['crunch', 'abdominal', 'torso', 'bauch', 'core', 'rotary', 'plank']],
+  ];
+  const autoArea = (name) => AREA_WORDS.find(([, ws]) => ws.some((w) => String(name || '').toLowerCase().includes(w)))?.[0] || null;
+  const areaOf = (m) => (m.area && AREAS[m.area] ? m.area : autoArea(m.name));
   const planById = (id) => state.plans.find((p) => p.id === id);
   const planMachines = (p) => p.machineIds.map(machineById).filter(Boolean);
+  // Plans take turns (A → B → A …): the one after the plan of the last plan-based training is due
+  function duePlanId() {
+    const plans = state.plans.filter((p) => planMachines(p).length);
+    if (plans.length < 2) return null;
+    const last = [...state.sessions].reverse().find((s) => s.planId && plans.some((p) => p.id === s.planId));
+    if (!last) return plans[0].id;
+    return plans[(plans.findIndex((p) => p.id === last.planId) + 1) % plans.length].id;
+  }
+  // Record: heavier than ever before on this machine, or the same top weight with more reps.
+  // Earlier sets of the running training raise the bar, so only the set that beats them gets the badge.
+  function isRecord(ex, set) {
+    if (isCardio(ex) || !set.done || set.weight == null) return false;
+    let w = null, r = 0;
+    const consider = (s) => {
+      if (!s.done || s.weight == null) return;
+      if (w == null || s.weight > w) { w = s.weight; r = s.reps ?? 0; } else if (s.weight === w && (s.reps ?? 0) > r) r = s.reps ?? 0;
+    };
+    for (const h of machineHistory(ex.machineId)) h.ex.sets.forEach(consider);
+    if (w == null) return false; // first time on this machine: nothing to beat
+    for (const s of ex.sets) { if (s === set) break; consider(s); }
+    return set.weight > w || (set.weight === w && (set.reps ?? 0) > r);
+  }
   function nextPlanName() {
     for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') if (!state.plans.some((p) => p.name === 'Plan ' + c)) return 'Plan ' + c;
     return 'Plan';
@@ -376,19 +408,41 @@
     return `<section class="card warn"><span><b>${p.count} ${p.count === 1 ? 'Training' : 'Trainings'} nicht gesichert</b><br><small>Die Daten liegen nur auf diesem iPhone.</small></span><button class="btn small" data-action="export">Sichern</button></section>`;
   }
 
+  // When each body area was last trained (strength sets only)
+  function areasCard() {
+    const last = {};
+    for (const s of state.sessions) for (const ex of s.exercises) {
+      if (isCardio(ex) || !doneSets(ex.sets).length) continue;
+      const a = areaOf(machineById(ex.machineId) || { name: ex.name });
+      if (a && (!last[a] || s.start > last[a])) last[a] = s.start;
+    }
+    if (!Object.keys(last).length) return '';
+    const today = new Date().setHours(0, 0, 0, 0);
+    const rows = Object.entries(AREAS).map(([k, label]) => {
+      if (!last[k]) return `<div class="area-row late"><span>${label}</span><b>noch nie</b></div>`;
+      const d = Math.round((today - new Date(last[k]).setHours(0, 0, 0, 0)) / DAY);
+      const txt = d <= 0 ? 'heute' : d === 1 ? 'gestern' : `vor ${d} Tagen`;
+      return `<div class="area-row ${d >= 7 ? 'late' : ''}"><span>${label}</span><b>${txt}</b></div>`;
+    }).join('');
+    return `<section class="card"><h3 style="margin-top:0">Zuletzt trainiert</h3>${rows}<p class="small muted">Rot = 7 Tage oder länger her.</p></section>`;
+  }
+
   function viewStart() {
     const last = state.sessions[state.sessions.length - 1];
+    const due = duePlanId();
+    const plans = due ? [planById(due), ...state.plans.filter((p) => p.id !== due)] : state.plans;
     return `
       <h1>Training</h1>
       ${exportReminder()}
-      ${state.plans.map((p) => {
+      ${plans.map((p) => {
         const used = [...state.sessions].reverse().find((x) => x.planId === p.id);
         const n = planMachines(p).length;
+        const isDue = !due || p.id === due;
         return `
-        <section class="card">
-          <div class="ex-head"><h2>${esc(p.name)}</h2><a class="btn small" href="#/plan/${p.id}">Ändern</a></div>
+        <section class="card ${due && isDue ? 'due' : ''}">
+          <div class="ex-head"><h2>${esc(p.name)}${due && isDue ? ' <span class="due-badge">Als Nächstes</span>' : ''}</h2><a class="btn small" href="#/plan/${p.id}">Ändern</a></div>
           <p class="small muted">${n} ${n === 1 ? 'Gerät' : 'Geräte'}${used ? ' · zuletzt ' + shortDate(used.start) : ''}</p>
-          <button class="btn primary block" data-action="start-plan" data-id="${p.id}">${esc(p.name)} starten</button>
+          <button class="btn ${isDue ? 'primary' : ''} block" data-action="start-plan" data-id="${p.id}">${esc(p.name)} starten</button>
         </section>`;
       }).join('')}
       ${last ? `
@@ -396,6 +450,7 @@
         <p class="small muted center">${last.exercises.length === 1 ? '1 Gerät' : last.exercises.length + ' Geräte'} vom ${shortDate(last.start)}, mit deinen letzten Werten</p>
         <button class="btn block" data-action="start-session">Leeres Training starten</button>` : `<button class="btn ${state.plans.length ? 'block' : 'primary big'}" data-action="start-session">${state.plans.length ? 'Leeres Training starten' : 'Training starten'}</button>`}
       <button class="btn block" data-action="new-plan">+ Neuer Plan (z. B. A und B)</button>
+      ${areasCard()}
       ${last ? `
         <section class="card">
           <h3 style="margin-top:0">Letztes Training</h3>
@@ -490,11 +545,11 @@
     const allDone = ex.sets.length && ex.sets.every((s) => s.done);
     const activeId = activeSetId(ex);
     const rows = ex.sets.map((s, i) => `
-      <div class="set-row ${s.done ? 'done' : ''} ${s.id === activeId ? 'active' : ''}" data-set="${s.id}">
+      <div class="set-row ${s.done ? 'done' : ''} ${s.id === activeId ? 'active' : ''} ${isRecord(ex, s) ? 'record' : ''}" data-set="${s.id}">
         <span class="set-no">${i + 1}${sideOf(ex, i) ? `<small>${sideOf(ex, i)}</small>` : ''}</span>
         <label class="field"><input type="text" inputmode="decimal" enterkeyhint="next" data-field="weight" value="${fmtNum(s.weight)}" placeholder="–" aria-label="Gewicht Satz ${i + 1}"><span>kg</span></label>
         <label class="field"><input type="text" inputmode="numeric" enterkeyhint="done" data-field="reps" value="${s.reps ?? ''}" placeholder="–" aria-label="Wiederholungen Satz ${i + 1}"><span>Wdh.</span></label>
-        <button class="check" data-action="toggle-set" aria-pressed="${s.done}" aria-label="Satz ${i + 1} erledigt">✓</button>
+        <button class="check" data-action="toggle-set" aria-pressed="${s.done}" aria-label="Satz ${i + 1} erledigt${isRecord(ex, s) ? ', Rekord' : ''}">${isRecord(ex, s) ? '🏆' : '✓'}</button>
         <button class="icon-btn" data-action="delete-set" aria-label="Satz ${i + 1} löschen">×</button>
       </div>${s.id === activeId ? stepperBar(s.id) : ''}`).join('');
     const started = ex.sets.some((s) => s.done);
@@ -609,6 +664,8 @@
       ${m.kind === 'cardio' ? '' : `
       <section class="card form" data-machine="${m.id}">
         <h2>Steigerung</h2>
+        <div class="setting-row"><span>Körperbereich<small>Für „Zuletzt trainiert“ auf der Startseite.</small></span>
+          <select data-mfield="area"><option value="">Automatisch${autoArea(m.name) ? ` (${AREAS[autoArea(m.name)]})` : ''}</option>${Object.entries(AREAS).map(([k, l]) => `<option value="${k}" ${k === m.area ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         <div class="setting-row"><span>Ziel-Wiederholungen<small>Schafft ein Satz die obere Zahl, schlägt die App beim nächsten Mal mehr Gewicht vor.</small></span>
           <span class="range-inputs"><input type="text" inputmode="numeric" data-mfield="repMin" value="${m.repMin ?? ''}" placeholder="10" aria-label="Wiederholungen von">–<input type="text" inputmode="numeric" data-mfield="repMax" value="${m.repMax ?? ''}" placeholder="15" aria-label="Wiederholungen bis"></span></div>
       </section>`}
@@ -852,13 +909,40 @@
     $('#sheet').hidden = true;
     document.body.classList.remove('sheet-open');
   }
-  let toastTimer;
-  function toast(msg) {
+  let toastTimer, toastAction = null;
+  // action = { label, fn }: a button in the toast (e.g. Rückgängig), shown a little longer
+  function toast(msg, action = null) {
     const t = $('#toast');
-    t.textContent = msg;
+    t.innerHTML = esc(msg) + (action ? ` <button class="toast-btn" data-action="toast-action">${esc(action.label)}</button>` : '');
+    toastAction = action ? action.fn : null;
     t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, 2600);
+    toastTimer = setTimeout(() => { t.hidden = true; toastAction = null; }, action ? 5000 : 2600);
+  }
+  // Delete a set of the running training, with Rückgängig
+  function deleteSet(ex, set) {
+    const i = ex.sets.indexOf(set);
+    if (i < 0) return;
+    if (state.timer && state.timer.setId === set.id) state.timer = null;
+    ex.sets.splice(i, 1);
+    if (selectedByEx[ex.id] === set.id) delete selectedByEx[ex.id];
+    save(); render();
+    toast(`Satz ${i + 1} gelöscht`, { label: 'Rückgängig', fn: () => {
+      const e2 = findEx(ex.id);
+      if (!e2) return;
+      e2.sets.splice(Math.min(i, e2.sets.length), 0, set);
+      save(); render();
+    } });
+  }
+  // Copy a set (weight and reps, not yet done) right below it
+  function copySet(ex, set) {
+    const i = ex.sets.indexOf(set);
+    if (i < 0) return;
+    const c = newSet(set.weight, set.reps);
+    ex.sets.splice(i + 1, 0, c);
+    selectedByEx[ex.id] = c.id;
+    save(); render();
+    toast(`Satz ${i + 1} kopiert`);
   }
 
   // Machine lists: cardio first, then everything A–Z
@@ -1045,6 +1129,7 @@
     a.exercises = a.exercises
       .map((e) => { const { progress, ...rest } = e; return isCardio(rest) ? rest : { ...rest, sets: doneSets(rest.sets) }; })
       .filter(exDone);
+    const records = a.exercises.reduce((n, e) => n + e.sets.filter((x) => isRecord(e, x)).length, 0);
     const plan = a.planId ? planById(a.planId) : null;
     if (plan) {
       const extra = [...new Set(a.exercises.map((e) => e.machineId))].filter((id) => machineById(id) && !plan.machineIds.includes(id));
@@ -1057,7 +1142,7 @@
     updateWakeLock();
     location.hash = '#/verlauf/' + a.id;
     render();
-    toast('Training gespeichert 💪');
+    toast(records ? `Training gespeichert 💪 · ${records} ${records === 1 ? 'Rekord' : 'Rekorde'} 🏆` : 'Training gespeichert 💪');
   }
 
   // ---------- export / import ----------
@@ -1137,9 +1222,10 @@
   }
   const serializeMachine = (m) => ({ id: m.id, name: m.name, kind: m.kind || 'strength', ...(m.kind === 'cardio' ? { cardioType: m.cardioType } : {}),
     setup: m.setup || '', restSec: m.rest, note: m.note || '', ...(m.sides != null ? { sides: !!m.sides } : {}),
-    ...(repRange(m) ? { repRange: { min: m.repMin, max: m.repMax } } : {}), created: toIso(m.created) });
-  // rep target from a file: only filled in when the phone has none
-  const machineExtras = (m) => (m.repRange?.min && m.repRange?.max ? { repMin: m.repRange.min, repMax: m.repRange.max } : {});
+    ...(repRange(m) ? { repRange: { min: m.repMin, max: m.repMax } } : {}), ...(m.area ? { area: m.area } : {}), created: toIso(m.created) });
+  // rep target and body area from a file: only filled in when the phone has none
+  const machineExtras = (m) => ({ ...(m.repRange?.min && m.repRange?.max ? { repMin: m.repRange.min, repMax: m.repRange.max } : {}),
+    ...(m.area && AREAS[m.area] ? { area: m.area } : {}) });
   const deserializeMachine = (m) => ({ id: m.id, name: m.name, ...(m.kind === 'cardio' ? { kind: 'cardio', cardioType: m.cardioType || 'stepper' } : {}),
     setup: m.setup || '', rest: m.restSec ?? m.rest ?? state.settings.defaultRest, note: m.note || '', ...(m.sides != null ? { sides: !!m.sides } : {}),
     ...machineExtras(m), created: toMs(m.created) });
@@ -1196,6 +1282,7 @@
           if (!have.note && m.note) have.note = m.note;
           const extras = machineExtras(m);
           if (!repRange(have) && extras.repMin) { have.repMin = extras.repMin; have.repMax = extras.repMax; }
+          if (!have.area && extras.area) have.area = extras.area;
           // the file's name wins, so a backup with corrected names can be imported
           if (String(m.name).trim() !== have.name) { have.name = String(m.name).trim(); renamed.set(have.id, have.name); renM++; }
         }
@@ -1370,6 +1457,7 @@
           }
           startRest(ex, set);
           if (selectedByEx[ex.id] === set.id) delete selectedByEx[ex.id];
+          if (isRecord(ex, set)) toast(`🏆 Rekord an ${ex.name}: ${fmtNum(set.weight)} kg × ${set.reps ?? '–'}`);
         } else {
           selectedByEx[ex.id] = set.id;
           set.done = false;
@@ -1383,12 +1471,15 @@
         break;
       }
       case 'delete-set':
-        if (!set) return;
-        if (state.timer && state.timer.setId === set.id) state.timer = null;
-        ex.sets.splice(ex.sets.indexOf(set), 1);
-        if (selectedByEx[ex.id] === set.id) delete selectedByEx[ex.id];
-        save(); render();
+        if (set) deleteSet(ex, set);
         break;
+      case 'toast-action': {
+        const fn = toastAction;
+        toastAction = null;
+        $('#toast').hidden = true;
+        if (fn) fn();
+        break;
+      }
       case 'step': {
         const bar = btn.closest('.stepper-bar');
         const target = ex && bar ? ex.sets.find((x) => x.id === bar.dataset.set) : null;
@@ -1587,6 +1678,7 @@
       if (f === 'rest') m.rest = parseInt(el.value, 10);
       else if (f === 'sides') m.sides = el.checked;
       else if (f === 'cardioType') m.cardioType = el.value;
+      else if (f === 'area') m.area = el.value || null;
       else if (f === 'repMin' || f === 'repMax') {
         const v = num(el.value);
         m[f] = v && v > 0 ? Math.round(v) : null;
@@ -1646,6 +1738,43 @@
     if (kind === 'new-machine' && (pickerTarget || state.active)) pickInto(m);
     else { render(); toast(`„${m.name}“ angelegt`); }
   });
+
+  // Swipe a set of the running training: left = delete (with Rückgängig), right = copy below
+  const SWIPE = 80;
+  let swipe = null;
+  document.addEventListener('touchstart', (e) => {
+    const row = e.target.closest('.exercise .set-row');
+    swipe = row && e.touches.length === 1 ? { row, x: e.touches[0].clientX, y: e.touches[0].clientY, dx: 0, on: false } : null;
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!swipe) return;
+    const dx = e.touches[0].clientX - swipe.x, dy = e.touches[0].clientY - swipe.y;
+    if (!swipe.on) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { swipe = null; return; } // vertical scroll
+      if (Math.abs(dx) < 14) return;
+      swipe.on = true;
+    }
+    swipe.dx = dx;
+    swipe.row.style.transform = `translateX(${dx}px)`;
+    swipe.row.classList.toggle('swipe-del', dx <= -SWIPE);
+    swipe.row.classList.toggle('swipe-copy', dx >= SWIPE);
+  }, { passive: true });
+  const endSwipe = () => {
+    const sw = swipe;
+    swipe = null;
+    if (!sw || !sw.on) return;
+    const card = sw.row.closest('.exercise');
+    const ex = card && findEx(card.dataset.ex);
+    const set = ex && ex.sets.find((x) => x.id === sw.row.dataset.set);
+    if (set && sw.dx <= -SWIPE) { deleteSet(ex, set); return; }
+    if (set && sw.dx >= SWIPE) { copySet(ex, set); return; }
+    sw.row.style.transition = 'transform .15s';
+    sw.row.style.transform = '';
+    sw.row.classList.remove('swipe-del', 'swipe-copy');
+    setTimeout(() => { sw.row.style.transition = ''; }, 200);
+  };
+  document.addEventListener('touchend', endSwipe);
+  document.addEventListener('touchcancel', () => { if (swipe) { swipe.dx = 0; endSwipe(); } });
 
   // Enter on weight jumps to reps
   document.addEventListener('keydown', (e) => {
